@@ -19,12 +19,30 @@ const Icon = {
   Chevron: (p: any) => <svg width={16} height={16} viewBox="0 0 24 24" {...sw} {...p}><path d="m6 9 6 6 6-6" /></svg>,
   Check: (p: any) => <svg width={14} height={14} viewBox="0 0 24 24" {...sw} {...p}><path d="M20 6 9 17l-5-5" /></svg>,
   Trash: (p: any) => <svg width={16} height={16} viewBox="0 0 24 24" {...sw} {...p}><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>,
+  Search: (p: any) => <svg width={14} height={14} viewBox="0 0 24 24" {...sw} {...p}><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>,
+  FileText: (p: any) => <svg width={14} height={14} viewBox="0 0 24 24" {...sw} {...p}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /><path d="M14 2v5h6" /><path d="M9 13h6M9 17h6" /></svg>,
+  FilePlus: (p: any) => <svg width={14} height={14} viewBox="0 0 24 24" {...sw} {...p}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /><path d="M14 2v5h6" /><path d="M12 11v6M9 14h6" /></svg>,
+  Folder: (p: any) => <svg width={14} height={14} viewBox="0 0 24 24" {...sw} {...p}><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9L9.2 3.9A2 2 0 0 0 7.5 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z" /></svg>,
+  Eye: (p: any) => <svg width={14} height={14} viewBox="0 0 24 24" {...sw} {...p}><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>,
+  Box: (p: any) => <svg width={14} height={14} viewBox="0 0 24 24" {...sw} {...p}><path d="M21 8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7z" /><path d="m3.3 7 8.7 5 8.7-5M12 22V12" /></svg>,
+  AlertCircle: (p: any) => <svg width={14} height={14} viewBox="0 0 24 24" {...sw} {...p}><circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" /></svg>,
 };
+
+interface ToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  status: 'running' | 'done' | 'error';
+  latency_ms?: number;
+  result?: unknown;
+  error?: string;
+}
 
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   a2uiMessages?: unknown[];
+  toolCalls?: ToolCall[];
 }
 
 /* Parse an SSE stream from a fetch Response without extra dependencies. */
@@ -49,6 +67,72 @@ async function* sseStream(res: Response) {
       if (data) yield { event, data: JSON.parse(data) };
     }
   }
+}
+
+
+/* ---------- Tool activity transcript (system truth, not model prose) ---------- */
+const TOOL_META: Record<string, { icon: any; verb: string }> = {
+  web_search: { icon: Icon.Search, verb: 'ค้นหาออนไลน์' },
+  read_text_file: { icon: Icon.FileText, verb: 'อ่านไฟล์' },
+  write_file: { icon: Icon.FileText, verb: 'เขียนไฟล์' },
+  create_file: { icon: Icon.FilePlus, verb: 'สร้างไฟล์' },
+  list_directory: { icon: Icon.Folder, verb: 'ดูโฟลเดอร์' },
+  reveal_path: { icon: Icon.Eye, verb: 'เปิดใน file manager' },
+  demo: { icon: Icon.Box, verb: 'ทดสอบระบบ' },
+};
+
+function argSummary(name: string, args: Record<string, unknown>): string {
+  if (name === 'web_search') return String(args?.query ?? '');
+  if (typeof args?.path === 'string') return args.path;
+  return JSON.stringify(args);
+}
+
+function ToolCallRow({ call }: { call: ToolCall }) {
+  const [open, setOpen] = useState(false);
+  const meta = TOOL_META[call.name] ?? { icon: Icon.Box, verb: call.name };
+  const IconCmp = meta.icon;
+  const running = call.status === 'running';
+  const failed = call.status === 'error';
+  return (
+    <div className={`tool-call${failed ? ' tool-call--error' : ''}`}>
+      <button
+        className="tool-call__head"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        type="button"
+      >
+        <span className={`tool-call__icon${running ? ' tool-call__icon--running' : ''}`}>
+          {failed ? <Icon.AlertCircle /> : <IconCmp />}
+        </span>
+        <span className="tool-call__label">
+          {running ? `${meta.verb}…` : `${meta.verb} · ${call.name}`}
+        </span>
+        {!running && (
+          <span className={`tool-call__meta${failed ? ' tool-call__meta--error' : ''}`}>
+            {failed ? '✕ ' : '✓ '}{call.latency_ms ?? 0} ms
+          </span>
+        )}
+        <Icon.Chevron style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 150ms' }} />
+      </button>
+      {open && (
+        <div className="tool-call__body">
+          <div className="tool-call__section">ARGS</div>
+          <pre className="tool-call__json">{JSON.stringify(call.arguments, null, 2)}</pre>
+          {failed ? (
+            <>
+              <div className="tool-call__section">ERROR</div>
+              <pre className="tool-call__json tool-call__json--error">{call.error}</pre>
+            </>
+          ) : call.result !== undefined ? (
+            <>
+              <div className="tool-call__section">RESULT</div>
+              <pre className="tool-call__json">{JSON.stringify(call.result, null, 2)}</pre>
+            </>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /* ---------- A2UI card (v1.0) rendered inside an assistant bubble ---------- */
@@ -344,7 +428,7 @@ export default function App() {
       const res = await fetch(`/api/conversations/${id}`);
       if (!res.ok) return;
       const conv = await res.json();
-      setMessages((conv.messages ?? []).map((m: any) => ({ role: m.role, content: m.content, a2uiMessages: m.a2uiMessages })));
+      setMessages((conv.messages ?? []).map((m: any) => ({ role: m.role, content: m.content, a2uiMessages: m.a2uiMessages, toolCalls: m.toolCalls })));
       setActiveConvId(id);
       setView('chat');
     } catch { /* keep list */ }
@@ -360,7 +444,12 @@ export default function App() {
     try {
       const payload = JSON.stringify({
         title: messages.find((m) => m.role === 'user')?.content?.slice(0, 60),
-        messages: messages.map((m) => ({ role: m.role, content: m.content, ...(m.a2uiMessages ? { a2uiMessages: m.a2uiMessages } : {}) })),
+        messages: messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+          ...(m.a2uiMessages ? { a2uiMessages: m.a2uiMessages } : {}),
+          ...(m.toolCalls ? { toolCalls: m.toolCalls } : {}),
+        })),
       });
       const res = activeConvId
         ? await fetch(`/api/conversations/${activeConvId}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: payload })
@@ -388,6 +477,37 @@ export default function App() {
       let assistantText = '';
       for await (const { event, data } of sseStream(res)) {
         if (event === 'start') setProvider(data?.provider ?? null);
+        if (event === 'tool' && data?.id) {
+          const call: ToolCall = { id: data.id, name: data.name, arguments: data.arguments ?? {}, status: 'running' };
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === 'assistant') {
+              last.toolCalls = [...(last.toolCalls ?? []), call];
+            }
+            return next;
+          });
+        }
+        if (event === 'tool_result' && data?.id) {
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            const calls = last?.toolCalls;
+            if (last?.role === 'assistant' && calls) {
+              const idx = calls.findIndex((c) => c.id === data.id);
+              if (idx >= 0) {
+                calls[idx] = {
+                  ...calls[idx],
+                  status: data.ok ? 'done' : 'error',
+                  latency_ms: data.latency_ms,
+                  result: data.result,
+                  error: data.error,
+                };
+              }
+            }
+            return next;
+          });
+        }
         if (event === 'delta') {
           // Engine emits {delta:{delta:"…",type:"text"}}; the adapter's own
           // injected deltas use {delta:{text:"…"}} — accept both.
@@ -545,10 +665,11 @@ export default function App() {
                     <span className="msg__avatar msg__avatar--ai"><Icon.Sparkles width={13} height={13} /></span>
                   )}
                   <div className="msg__col">
+                    {(m.toolCalls ?? []).map((c) => <ToolCallRow key={c.id} call={c} />)}
                     <div className="msg__bubble">
-                      {m.content || (lastIsTyping && i === messages.length - 1 ? (
+                      {m.content || (m.toolCalls && m.toolCalls.length > 0 ? '' : (lastIsTyping && i === messages.length - 1 ? (
                         <span className="msg__typing" aria-label="กำลังพิมพ์"><i /><i /><i /></span>
-                      ) : '')}
+                      ) : ''))}
                       {m.a2uiMessages && <A2uiCard messages={m.a2uiMessages} onAction={onAction} />}
                     </div>
                   </div>

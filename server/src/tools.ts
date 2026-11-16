@@ -1,7 +1,7 @@
 // Desktop tools the agent can call (executed by the adapter in the
 // Electron main process / standalone server, as the local user).
 // Enabled when SAGENT_ENABLE_FS_TOOLS=1 (the packaged app sets it).
-import { readdirSync, statSync, readFileSync } from 'node:fs';
+import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -34,6 +34,42 @@ export const DESKTOP_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'write_file',
+    description: 'Create or overwrite a UTF-8 text file with the given content. Parent directories are created if missing. Text extensions only.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Absolute file path' },
+        content: { type: 'string', description: 'Full file content to write' },
+      },
+      required: ['path', 'content'],
+    },
+  },
+  {
+    name: 'create_file',
+    description: 'Create a NEW UTF-8 text file. Fails if the file already exists (use write_file to overwrite).',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Absolute file path (must not exist)' },
+        content: { type: 'string', description: 'File content' },
+      },
+      required: ['path', 'content'],
+    },
+  },
+  {
+    name: 'web_search',
+    description: 'Search the web (DuckDuckGo, keyless). Returns titles, URLs and snippets. Use for current information.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search query' },
+        max_results: { type: 'number', description: 'Optional cap, default 5 (max 8)' },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'reveal_path',
     description: 'Reveal a file or folder in the system file manager (Finder on macOS, Explorer on Windows).',
     parameters: {
@@ -44,16 +80,26 @@ export const DESKTOP_TOOLS: ToolDef[] = [
   },
 ];
 
+function decodeEntities(s: string): string {
+  return s
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
+
 const TEXT_EXTS = new Set([
   '.txt', '.md', '.json', '.jsonl', '.yaml', '.yml', '.toml', '.csv', '.tsv',
   '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.rs', '.go', '.java',
   '.c', '.h', '.cpp', '.html', '.css', '.scss', '.sh', '.env', '.xml', '.log',
 ]);
 
-export function executeDesktopTool(name: string, args: Record<string, unknown>): unknown {
+export async function executeDesktopTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   const raw = typeof args?.path === 'string' ? args.path : '';
   const target = raw.trim();
-  if (!target || !path.isAbsolute(target)) {
+  // Only path-based tools require an absolute path (web_search has none).
+  const needsPath = name !== 'web_search';
+  if (needsPath && (!target || !path.isAbsolute(target))) {
     throw new Error('path must be absolute');
   }
 
@@ -75,6 +121,52 @@ export function executeDesktopTool(name: string, args: Record<string, unknown>):
     if (stat.size > 2_000_000) throw new Error('file too large (>2MB)');
     const content = readFileSync(target, 'utf8').slice(0, maxBytes);
     return { path: target, bytes: Math.min(stat.size, maxBytes), truncated: stat.size > maxBytes, content };
+  }
+
+  if (name === 'write_file' || name === 'create_file') {
+    const content = typeof args?.content === 'string' ? args.content : null;
+    if (content === null || !path.isAbsolute(target)) throw new Error('path must be absolute and content a string');
+    if (content.length > 1_000_000) throw new Error('content too large (>1MB)');
+    if (!TEXT_EXTS.has(path.extname(target).toLowerCase())) {
+      throw new Error(`refusing to write non-text extension "${path.extname(target)}"`);
+    }
+    if (name === 'create_file' && existsSync(target)) {
+      throw new Error('file already exists — use write_file to overwrite');
+    }
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, content, 'utf8');
+    return { path: target, bytes: Buffer.byteLength(content, 'utf8'), created: name === 'create_file' || !existsSync(target) };
+  }
+
+  if (name === 'web_search') {
+    const query = typeof args?.query === 'string' ? args.query.trim() : '';
+    if (!query) throw new Error('query is required');
+    const max = Math.min(Math.max(Number(args?.max_results) || 5, 1), 8);
+    const res = await fetch('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query), {
+      method: 'GET',
+      headers: { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0 Safari/537.36', 'accept-language': 'th,en;q=0.8' },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) throw new Error(`search HTTP ${res.status}`);
+    const html = await res.text();
+    // DDG html results: <a class="result__a" href="...">title</a> ... <a class="result__snippet"...>snippet</a>
+    const results: Array<{ title: string; url: string; snippet: string }> = [];
+    const linkRe = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+    const snippetRe = /class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
+    const snippets: string[] = [];
+    let sm: RegExpExecArray | null;
+    while ((sm = snippetRe.exec(html)) !== null) snippets.push(decodeEntities(sm[1]));
+    let lm: RegExpExecArray | null;
+    while ((lm = linkRe.exec(html)) !== null && results.length < max) {
+      let url = decodeEntities(lm[1]);
+      // DDG wraps URLs: /l/?uddg=<encoded>
+      const uddg = url.match(/[?&]uddg=([^&]+)/);
+      if (uddg) url = decodeURIComponent(uddg[1]);
+      if (!url.startsWith('http')) continue;
+      results.push({ title: decodeEntities(lm[2]).slice(0, 200), url, snippet: (snippets[results.length] ?? '').slice(0, 300) });
+    }
+    if (results.length === 0) throw new Error('no results parsed (search layout may have changed)');
+    return { query, count: results.length, results };
   }
 
   if (name === 'reveal_path') {

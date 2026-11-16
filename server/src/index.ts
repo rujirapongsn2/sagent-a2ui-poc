@@ -63,10 +63,10 @@ function toolDefinitions() {
   return defs;
 }
 
-function executeTool(name: string, args: Record<string, unknown>): unknown {
+async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   if (name === 'demo') return { ok: true, by: 'adapter' };
   if (ENABLE_FS_TOOLS && DESKTOP_TOOLS.some((t) => t.name === name)) {
-    return executeDesktopTool(name, args);
+    return await executeDesktopTool(name, args);
   }
   throw new Error(`unknown tool: ${name}`);
 }
@@ -168,6 +168,17 @@ function readBody(req: IncomingMessage): Promise<ChatBody> {
   });
 }
 
+/** Keep tool_result SSE payloads bounded (frontend truncates display anyway). */
+function capForSse(value: unknown): unknown {
+  try {
+    const json = JSON.stringify(value);
+    if (json.length <= 4000) return value;
+    return { _truncated: true, preview: json.slice(0, 2000) + '…' };
+  } catch {
+    return { _unserializable: true };
+  }
+}
+
 function sseSend(res: ServerResponse, event: string, data: unknown) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
@@ -222,20 +233,29 @@ async function runEngine(body: ChatBody, res: ServerResponse) {
 
   let finalText = '';
 
-  rl.on('line', (line) => {
+  rl.on('line', async (line) => {
     let frame: any;
     try { frame = JSON.parse(line); } catch { return; }
     if (frame.kind === 'event' && frame.event?.type === 'messageUpdate') {
       // sagent streams deltas; forward as-is for the client to assemble.
       sseSend(res, 'delta', frame.event);
     } else if (frame.kind === 'tool_request') {
-      sseSend(res, 'tool', { name: frame.name, arguments: frame.arguments });
+      // Tool activity is SYSTEM truth (not model prose): both events are
+      // emitted by the adapter so the transcript stays verifiable.
+      const started = Date.now();
+      sseSend(res, 'tool', { id: frame.id, name: frame.name, arguments: frame.arguments ?? {} });
       let reply: Record<string, unknown>;
+      let outcome: Record<string, unknown>;
       try {
-        reply = { protocol: 1, kind: 'tool_result', id: frame.id, result: executeTool(frame.name, frame.arguments ?? {}) };
+        const result = await executeTool(frame.name, frame.arguments ?? {});
+        reply = { protocol: 1, kind: 'tool_result', id: frame.id, result };
+        outcome = { id: frame.id, name: frame.name, ok: true, latency_ms: Date.now() - started, result: capForSse(result) };
       } catch (e: any) {
-        reply = { protocol: 1, kind: 'tool_result', id: frame.id, error: String(e?.message ?? e).slice(0, 400) };
+        const msg = String(e?.message ?? e).slice(0, 400);
+        reply = { protocol: 1, kind: 'tool_result', id: frame.id, error: msg };
+        outcome = { id: frame.id, name: frame.name, ok: false, latency_ms: Date.now() - started, error: msg };
       }
+      sseSend(res, 'tool_result', outcome);
       child.stdin.write(JSON.stringify(reply) + '\n');
     } else if (frame.kind === 'done') {
       finalText = frame.text ?? '';
