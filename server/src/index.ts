@@ -268,6 +268,73 @@ function reqCleanup(_res: ServerResponse, _child: ReturnType<typeof spawn>) {
   // PoC: no cancel endpoint yet; engine runs are short-lived.
 }
 
+
+// ---- Test connection: run a minimal real inference through the engine ----
+async function testLlmConnection(override?: {
+  provider?: string; base_url?: string; model?: string; api_key?: string;
+}): Promise<{ ok: boolean; latency_ms: number; text?: string; error?: string }> {
+  const cfg = llmConfigForRun();
+  const provider = (override?.provider ?? cfg.provider) as 'mock' | 'openai_compat' | 'ollama';
+  let base_url: string | null = override?.base_url?.trim() || cfg.base_url || null;
+  let model: string | null = override?.model?.trim() || cfg.model || null;
+  let api_key: string | null = override?.api_key?.trim() || cfg.api_key || null;
+  if (provider === 'openai_compat') {
+    base_url = base_url || 'https://api.z.ai/api/coding/paas/v4';
+    model = model || 'glm-5.3-flash';
+  } else if (provider === 'ollama') {
+    base_url = base_url || 'http://127.0.0.1:11434';
+    model = model || 'qwen3:8b';
+  }
+  if (provider !== 'mock' && (!base_url || !model)) {
+    return { ok: false, latency_ms: 0, error: 'ต้องระบุ base URL และโมเดล' };
+  }
+  if (provider === 'openai_compat' && !api_key) {
+    return { ok: false, latency_ms: 0, error: 'ยังไม่มี API key (กรอกแล้วกดทดสอบ หรือบันทึกก่อน)' };
+  }
+
+  const started = Date.now();
+  return await new Promise((resolve) => {
+    const payload = {
+      protocol: 1,
+      prompt: 'Reply with exactly: OK',
+      system_prompt: '',
+      messages: [],
+      config: { provider, base_url, model, api_key, max_turns: 1 },
+      tools: [],
+    };
+    const child = spawn(ENGINE, [], { stdio: ['pipe', 'pipe', 'ignore'] });
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve({ ok: false, latency_ms: Date.now() - started, error: 'หมดเวลา 15 วินาที — ตรวจ base URL / เครือข่าย' });
+    }, 15_000);
+    let buf = '';
+    child.stdout.on('data', (c: Buffer) => {
+      buf += c.toString();
+      for (const line of buf.split('\n')) {
+        let frame: any;
+        try { frame = JSON.parse(line); } catch { continue; }
+        if (frame?.kind === 'done') {
+          clearTimeout(timer);
+          child.kill();
+          resolve({
+            ok: Boolean(frame.ok),
+            latency_ms: Date.now() - started,
+            text: String(frame.text ?? '').slice(0, 120),
+            error: frame.ok ? undefined : String(frame.error ?? frame.stop_reason ?? 'unknown'),
+          });
+          return;
+        }
+      }
+      buf = buf.slice(buf.lastIndexOf('\n') + 1);
+    });
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      resolve({ ok: false, latency_ms: Date.now() - started, error: String(e) });
+    });
+    child.stdin.write(JSON.stringify(payload) + '\n');
+  });
+}
+
 const server = createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'content-type');
@@ -329,6 +396,20 @@ const server = createServer(async (req, res) => {
       res.writeHead(ok ? 200 : 404); res.end('{}');
       return;
     }
+  }
+
+  if (req.method === 'POST' && req.url === '/api/settings/test') {
+    const body = await readBody(req).catch(() => null);
+    const result = await testLlmConnection({
+      provider: typeof body?.provider === 'string' ? body.provider : undefined,
+      base_url: typeof body?.base_url === 'string' ? body.base_url : undefined,
+      model: typeof body?.model === 'string' ? body.model : undefined,
+      api_key: typeof body?.api_key === 'string' && body.api_key.trim() !== '' ? body.api_key : undefined,
+    });
+    console.log(`[settings] test ${body?.provider}: ok=${result.ok} ${result.latency_ms}ms`);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(result));
+    return;
   }
 
   if (req.url === '/api/settings') {

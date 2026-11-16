@@ -98,3 +98,14 @@ npm run dist:mac                           # dmg (arm64+x64); dist:win ใน CI
 ### API เพิ่ม
 - `GET /api/settings` → `{provider, base_url, model, has_api_key, key_stored_securely}` (ไม่คืน key)
 - `PUT /api/settings` `{provider, base_url?, model?, api_key?}` (api_key เว้นว่าง = คงเดิม, "" = ล้าง)
+
+## เฟส 3 — เสร็จแล้ว (16 พ.ย. 2026)
+
+- **ประวัติบทสนทนา** — `HistoryStore` (JSON ใน `userData/conversations`) + REST
+  `/api/conversations[/id]` (GET/POST/PUT/DELETE); auto-save หลังทุก run (รวม a2uiMessages);
+  หน้า "ประวัติ" ในแอป: รายการ + วันที่ไทย + เปิดต่อคุยได้ + ลบ + ปุ่มบทสนทนาใหม่
+- **Few-shot เพิ่ม** — การ์ดอนุมัติ 2 ปุ่ม (approve/reject events); ทดสอบ live: GLM สร้างการ์ด
+  ตามคำขอจริง (detail "คุณสมชาย ลากิจ 3 วัน") ผ่าน validation
+- **Release v0.1.0** — tag `v0.1.0` → CI สร้าง GitHub Release พร้อม dmg (arm64/x64) + exe;
+  auto-update ผูกกับ release นี้ (private repo: updater ต้องมี GH_TOKEN ในเครื่อง)
+- ยังค้าง: code signing (ต้องซื้อ cert — SmartScreen/Gatekeeper จะเตือนจนกว่าจะ sign)

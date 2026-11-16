@@ -103,9 +103,36 @@ function SettingsPanel() {
 
   useEffect(() => {
     fetch('/api/settings').then((r) => r.json()).then((d) => {
-      if (!d.error) setForm({ provider: d.provider, base_url: d.base_url ?? '', model: d.model ?? '', api_key: '' });
+      // Mock is dev-only (env) — never offered in the UI; treat it as unconfigured.
+      const provider = d.provider === 'mock' ? 'openai_compat' : d.provider;
+      setForm({ provider, base_url: d.base_url ?? '', model: d.model ?? '', api_key: '' });
     }).catch(() => setForm({ provider: 'mock', base_url: '', model: '', api_key: '' }));
   }, []);
+
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; latency_ms: number; text?: string; error?: string } | null>(null);
+
+  async function testConnection() {
+    if (!form || testing) return;
+    setTesting(true); setTestResult(null); setSaved(null); setError(null);
+    try {
+      const res = await fetch('/api/settings/test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider: form.provider,
+          base_url: form.base_url,
+          model: form.model,
+          ...(form.api_key.trim() !== '' ? { api_key: form.api_key } : {}),
+        }),
+      });
+      setTestResult(await res.json());
+    } catch (e: any) {
+      setTestResult({ ok: false, latency_ms: 0, error: String(e?.message ?? e) });
+    } finally {
+      setTesting(false);
+    }
+  }
 
   async function save() {
     if (!form || busy) return;
@@ -150,7 +177,6 @@ function SettingsPanel() {
           <span className="field__label">ผู้ให้บริการ</span>
           <div className="field__row">
             {([
-              ['mock', 'Mock (ทดสอบ)'],
               ['openai_compat', 'OpenAI-compatible (GLM ฯลฯ)'],
               ['ollama', 'Ollama (ออฟไลน์)'],
             ] as const).map(([value, label]) => (
@@ -206,8 +232,33 @@ function SettingsPanel() {
           <button className="btn" onClick={save} disabled={busy} type="button">
             <Icon.Check /> {busy ? 'กำลังบันทึก…' : 'บันทึกการตั้งค่า'}
           </button>
+          {form.provider !== 'mock' && (
+            <button className="btn btn--ghost" onClick={testConnection} disabled={testing} type="button">
+              {testing ? 'กำลังทดสอบ…' : 'ทดสอบการเชื่อมต่อ'}
+            </button>
+          )}
           {saved && <span style={{ color: 'var(--accent)', fontSize: 'var(--fs-label)' }}>{saved}</span>}
           {error && <span className="a2ui-error">{error}</span>}
+          {testResult && (
+            <div
+              role="status"
+              className="test-result"
+              style={{
+                width: '100%',
+                marginTop: 'var(--sp-2)',
+                padding: '10px 14px',
+                borderRadius: 'var(--r-control)',
+                border: `1px solid ${testResult.ok ? '#C8E6D2' : '#F3D4D1'}`,
+                background: testResult.ok ? 'rgba(33, 110, 78, 0.05)' : 'rgba(174, 46, 36, 0.04)',
+                fontSize: 'var(--fs-label)',
+                color: testResult.ok ? '#216E4E' : '#AE2E24',
+              }}
+            >
+              {testResult.ok
+                ? `เชื่อมต่อสำเร็จ · ${testResult.latency_ms} ms · ตอบ: "${testResult.text ?? ''}"`
+                : `ไม่สำเร็จ · ${testResult.error ?? 'unknown'}`}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -451,13 +502,13 @@ export default function App() {
           <div className="dropdown">
             <button className="btn" onClick={() => setStatusOpen((v) => !v)} aria-expanded={statusOpen} aria-haspopup="menu">
               <Icon.Sparkles width={15} height={15} />
-              {provider === 'openai_compat' ? 'GLM' : provider === 'mock' ? 'Mock engine' : 'AI engine'}
+              {provider === 'openai_compat' ? 'OpenAI-compatible' : provider === 'ollama' ? 'Ollama' : 'AI engine'}
               <Icon.Chevron />
             </button>
             {statusOpen && (
               <div className="dropdown__menu" role="menu">
                 <div className="dropdown__item dropdown__item--active" role="menuitem">
-                  <span>{provider === 'openai_compat' ? 'GLM (openai_compat)' : 'Mock provider'}</span>
+                  <span>{provider === 'openai_compat' ? 'OpenAI-compatible' : provider === 'ollama' ? 'Ollama' : 'ยังไม่ได้กำหนด'}</span>
                   <small>provider ที่ adapter ใช้อยู่ — สลับที่ server (SAGENT_PROVIDER)</small>
                 </div>
                 <div className="dropdown__item" role="menuitem" style={{ opacity: 0.6, cursor: 'default' }}>
