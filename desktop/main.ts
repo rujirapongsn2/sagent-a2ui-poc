@@ -17,6 +17,7 @@ const appDist = packaged
   ? path.join(process.resourcesPath, 'app-dist')
   : path.join(__dirname, '../../app/dist');
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+const historyPath = path.join(app.getPath('userData'), 'conversations');
 
 const PORT = 47000 + randomInt(0, 1000);
 
@@ -41,6 +42,7 @@ async function createWindow() {
     enginePath,
     appDist,
     settingsPath,
+    historyPath,
     secureStore: safeStorage.isEncryptionAvailable() ? secureStore : undefined,
   });
 

@@ -8,4 +8,7 @@ const HERE = typeof __dirname !== 'undefined'
   ? __dirname
   : path.dirname(new URL(import.meta.url).pathname);
 
-startServer({ settingsPath: path.resolve(HERE, '../../.runtime/settings.json') });
+startServer({
+  settingsPath: path.resolve(HERE, '../../.runtime/settings.json'),
+  historyPath: path.resolve(HERE, '../../.runtime/conversations'),
+});

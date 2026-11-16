@@ -18,6 +18,7 @@ const Icon = {
   Send: (p: any) => <svg width={17} height={17} viewBox="0 0 24 24" {...sw} {...p}><path d="M22 2 11 13" /><path d="M22 2 15 22l-4-9-9-4z" /></svg>,
   Chevron: (p: any) => <svg width={16} height={16} viewBox="0 0 24 24" {...sw} {...p}><path d="m6 9 6 6 6-6" /></svg>,
   Check: (p: any) => <svg width={14} height={14} viewBox="0 0 24 24" {...sw} {...p}><path d="M20 6 9 17l-5-5" /></svg>,
+  Trash: (p: any) => <svg width={16} height={16} viewBox="0 0 24 24" {...sw} {...p}><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>,
 };
 
 interface ChatMessage {
@@ -128,6 +129,7 @@ function SettingsPanel() {
       setError(String(e?.message ?? e));
     } finally {
       setBusy(false);
+      void persistConversation();
     }
   }
 
@@ -212,6 +214,44 @@ function SettingsPanel() {
   );
 }
 
+
+/* ---------- Conversation history ---------- */
+function HistoryPanel({ conversations, onOpen, onDelete, onNew }: {
+  conversations: Array<{ id: string; title: string; updated_at: string }>;
+  onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
+  onNew: () => void;
+}) {
+  return (
+    <div className="chat">
+      <div className="chat__inner" style={{ maxWidth: 640, paddingTop: 'var(--sp-6)' }}>
+        <div className="field__row" style={{ justifyContent: 'space-between', marginBottom: 'var(--sp-6)', width: '100%' }}>
+          <h2 className="hero__title" style={{ fontSize: 'var(--fs-heading)', margin: 0 }}>
+            <span className="grad">ประวัติ</span>บทสนทนา
+          </h2>
+          <button className="btn" onClick={onNew} type="button"><Icon.Chat /> บทสนทนาใหม่</button>
+        </div>
+        {conversations.length === 0 && (
+          <p className="hero__sub" style={{ textAlign: 'left' }}>ยังไม่มีบทสนทนาที่บันทึกไว้</p>
+        )}
+        {conversations.map((c) => (
+          <div key={c.id} className="conv-row">
+            <button className="conv-row__main" onClick={() => onOpen(c.id)} type="button">
+              <span className="conv-row__title">{c.title || 'บทสนทนา'}</span>
+              <span className="conv-row__date">
+                {new Date(c.updated_at).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })}
+              </span>
+            </button>
+            <button className="btn btn--ghost btn--icon" onClick={() => onDelete(c.id)} aria-label={`ลบ ${c.title}`} type="button">
+              <Icon.Trash />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const SUGGESTIONS = [
   'ช่วยจองโต๊ะอาหาร 4 คน พร้อมการ์ดยืนยัน',
   'อธิบายว่าการ์ด A2UI ทำงานอย่างไร',
@@ -225,10 +265,59 @@ export default function App() {
   const [provider, setProvider] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
-  const [view, setView] = useState<'chat' | 'settings'>('chat');
+  const [view, setView] = useState<'chat' | 'settings' | 'history'>('chat');
+  const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<Array<{ id: string; title: string; updated_at: string }>>([]);
   const scroller = useRef<HTMLDivElement>(null);
 
   useEffect(() => { scroller.current?.scrollTo({ top: 1e9 }); }, [messages, actionAck]);
+
+  async function refreshConversations() {
+    try {
+      const res = await fetch('/api/conversations');
+      const data = await res.json();
+      if (Array.isArray(data.conversations)) setConversations(data.conversations);
+    } catch { /* offline list stays */ }
+  }
+
+  useEffect(() => { if (view === 'history') void refreshConversations(); }, [view]);
+
+  function newConversation() {
+    setMessages([]);
+    setActiveConvId(null);
+    setView('chat');
+  }
+
+  async function openConversation(id: string) {
+    try {
+      const res = await fetch(`/api/conversations/${id}`);
+      if (!res.ok) return;
+      const conv = await res.json();
+      setMessages((conv.messages ?? []).map((m: any) => ({ role: m.role, content: m.content, a2uiMessages: m.a2uiMessages })));
+      setActiveConvId(id);
+      setView('chat');
+    } catch { /* keep list */ }
+  }
+
+  async function deleteConversation(id: string) {
+    await fetch(`/api/conversations/${id}`, { method: 'DELETE' }).catch(() => null);
+    void refreshConversations();
+  }
+
+  async function persistConversation() {
+    if (messages.length === 0) return;
+    try {
+      const payload = JSON.stringify({
+        title: messages.find((m) => m.role === 'user')?.content?.slice(0, 60),
+        messages: messages.map((m) => ({ role: m.role, content: m.content, ...(m.a2uiMessages ? { a2uiMessages: m.a2uiMessages } : {}) })),
+      });
+      const res = activeConvId
+        ? await fetch(`/api/conversations/${activeConvId}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: payload })
+        : await fetch('/api/conversations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload });
+      const conv = await res.json().catch(() => null);
+      if (!activeConvId && conv?.id) setActiveConvId(conv.id);
+    } catch { /* history is best-effort */ }
+  }
 
   async function send(text?: string) {
     const message = (text ?? input).trim();
@@ -284,6 +373,7 @@ export default function App() {
       });
     } finally {
       setBusy(false);
+      void persistConversation();
     }
   }
 
@@ -324,7 +414,10 @@ export default function App() {
           >
             <Icon.Chat /> บทสนทนา
           </button>
-          <button className="nav-item" onClick={() => setMenuOpen(false)}>
+          <button
+            className={`nav-item${view === 'history' ? ' nav-item--active' : ''}`}
+            onClick={() => { setView('history'); setMenuOpen(false); }}
+          >
             <Icon.History /> ประวัติ
           </button>
           <button className="nav-item" onClick={() => setMenuOpen(false)}>
@@ -353,7 +446,7 @@ export default function App() {
           >
             <Icon.Menu />
           </button>
-          <h1 className="toolbar__title">{view === 'settings' ? 'การตั้งค่า' : 'บทสนทนา'}</h1>
+          <h1 className="toolbar__title">{view === 'settings' ? 'การตั้งค่า' : view === 'history' ? 'ประวัติ' : 'บทสนทนา'}</h1>
 
           <div className="dropdown">
             <button className="btn" onClick={() => setStatusOpen((v) => !v)} aria-expanded={statusOpen} aria-haspopup="menu">
@@ -378,6 +471,8 @@ export default function App() {
 
         {view === 'settings' ? (
           <SettingsPanel />
+        ) : view === 'history' ? (
+          <HistoryPanel conversations={conversations} onOpen={openConversation} onDelete={deleteConversation} onNew={newConversation} />
         ) : (
         <div className="chat" ref={scroller}>
           {messages.length === 0 ? (

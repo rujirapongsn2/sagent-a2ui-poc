@@ -7,6 +7,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SettingsStore, type SecureStore } from './settings.js';
+import { HistoryStore, type HistoryMessage } from './history.js';
 import { DESKTOP_TOOLS, executeDesktopTool } from './tools.js';
 
 // Resolve this file's directory in BOTH module worlds: ESM (tsx/dev) and the
@@ -28,6 +29,7 @@ const ENV_PROVIDER = process.env.SAGENT_PROVIDER ?? 'mock';
 const ENABLE_FS_TOOLS = process.env.SAGENT_ENABLE_FS_TOOLS === '1';
 
 let settingsStore: SettingsStore | null = null;
+let historyStore: HistoryStore | null = null;
 
 /** Build the sagent LlmConfig for this run from settings/env defaults. */
 function llmConfigForRun() {
@@ -95,7 +97,28 @@ const SYSTEM_PROMPT = `คุณคือ assistant ภาษาไทยขอ�
 \`\`\`
 (สังเกต: child ของ Button ต้องเป็น id ของ Text component ที่ประกาศแยก และ action ใช้ event:{name,context})
 
-กติกา: หากผู้ใช้ไม่ขอการ์ด อย่าแนบบล็อก a2ui ตอบข้อความธรรมดา ตอบสั้นกระชับ`;
+ตัวอย่างที่ 2 — การ์ดอนุมัติงาน (หลายปุ่มหลาย action):
+\`\`\`a2ui
+[
+  {"version":"1.0","createSurface":{"surfaceId":"card-1","catalogId":"${BASIC_CATALOG_ID}"}},
+  {"version":"1.0","updateComponents":{"surfaceId":"card-1","components":[
+    {"id":"root","component":"Column","children":["title","detail","approve","ap_label","reject","re_label"]},
+    {"id":"title","component":"Text","text":{"@path":"/title"},"variant":"body"},
+    {"id":"detail","component":"Text","text":{"@path":"/detail"},"variant":"body"},
+    {"id":"approve","component":"Button","child":"ap_label","variant":"primary","action":{"event":{"name":"approve","context":{}}}},
+    {"id":"ap_label","component":"Text","text":"อนุมัติ"},
+    {"id":"reject","component":"Button","child":"re_label","action":{"event":{"name":"reject","context":{}}}},
+    {"id":"re_label","component":"Text","text":"ปฏิเสธ"}
+  ]}},
+  {"version":"1.0","updateDataModel":{"surfaceId":"card-1","path":"/","value":{
+    "title":"อนุมัติใบลา","detail":"คุณสมชาย ลากิจ 3 วัน"
+  }}}
+]
+\`\`
+ส่วนประกอบที่ใช้ได้: Column, Row, Text (variant: body|caption), Button (variant: primary หรือไม่ใส่), Card, List, TextField, Divider, Image, Icon
+
+กติกา: หากผู้ใช้ไม่ขอการ์ด อย่าแนบบล็อก a2ui ตอบข้อความธรรมดา ตอบสั้นกระชับ
+เมื่อมี tools ให้ใช้ tool ช่วยตอบ (เช่น list_directory, read_text_file) แล้วสรุปผล`;
 
 // Mock-mode demo card: proves the renderer + action round-trip without an LLM.
 // Shape follows the official catalogs/basic/v1/examples/scaffold-interactive-
@@ -257,6 +280,57 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // ---- Conversation history ----
+  const convMatch = req.url?.match(/^\/api\/conversations\/([a-f0-9-]+)$/i);
+  if (req.url === '/api/conversations' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ conversations: historyStore?.list() ?? [] }));
+    return;
+  }
+  if (req.url === '/api/conversations' && req.method === 'POST') {
+    if (!historyStore) { res.writeHead(503); res.end('{}'); return; }
+    const body = await readBody(req).catch(() => null);
+    const conv = historyStore.save({
+      title: typeof body?.title === 'string' ? body.title : undefined,
+      messages: Array.isArray(body?.messages) ? body.messages : [],
+    });
+    res.writeHead(201, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(conv));
+    return;
+  }
+  if (convMatch) {
+    const id = convMatch[1];
+    if (req.method === 'GET') {
+      const conv = historyStore?.get(id) ?? null;
+      if (!conv) { res.writeHead(404); res.end('{}'); } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(conv));
+      }
+      return;
+    }
+    if (req.method === 'PUT') {
+      if (!historyStore) { res.writeHead(503); res.end('{}'); return; }
+      const body = await readBody(req).catch(() => null);
+      try {
+        const conv = historyStore.save({
+          id,
+          title: typeof body?.title === 'string' ? body.title : undefined,
+          messages: Array.isArray(body?.messages) ? (body.messages as HistoryMessage[]) : [],
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(conv));
+      } catch (e: any) {
+        res.writeHead(404); res.end(JSON.stringify({ error: String(e?.message ?? e) }));
+      }
+      return;
+    }
+    if (req.method === 'DELETE') {
+      const ok = historyStore?.delete(id) ?? false;
+      res.writeHead(ok ? 200 : 404); res.end('{}');
+      return;
+    }
+  }
+
   if (req.url === '/api/settings') {
     if (!settingsStore) {
       res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -321,12 +395,13 @@ const server = createServer(async (req, res) => {
 
 // Library module: exports the server without side effects. The standalone
 // entry (standalone.ts) and the Electron main both import from here.
-export function startServer(opts?: { port?: number; host?: string; enginePath?: string; appDist?: string; settingsPath?: string; secureStore?: SecureStore }) {
+export function startServer(opts?: { port?: number; host?: string; enginePath?: string; appDist?: string; settingsPath?: string; historyPath?: string; secureStore?: SecureStore }) {
   const port = opts?.port ?? PORT;
   const host = opts?.host ?? HOST;
   if (opts?.enginePath) ENGINE = opts.enginePath;
   if (opts?.appDist) APP_DIST = opts.appDist;
   if (opts?.settingsPath) settingsStore = new SettingsStore(opts.settingsPath, opts?.secureStore);
+  if (opts?.historyPath) historyStore = new HistoryStore(opts.historyPath);
   return new Promise<ReturnType<typeof server.listen>>((resolve) => {
     const handle = server.listen(port, host, () => {
       console.log(`sagent-a2ui adapter on http://${host}:${port} | provider=${settingsStore ? settingsStore.view().provider : ENV_PROVIDER} | engine=${ENGINE}`);
