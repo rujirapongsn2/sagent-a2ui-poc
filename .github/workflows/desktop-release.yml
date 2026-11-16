@@ -16,7 +16,7 @@ jobs:
         include:
           - os: macos-latest      # arm64
             rust-targets: aarch64-apple-darwin
-          - os: macos-intel       # x64
+          - os: macos-13         # x64 (intel)
             rust-targets: x86_64-apple-darwin
           - os: windows-latest    # x64
             rust-targets: x86_64-pc-windows-msvc

@@ -82,3 +82,19 @@ npm run dist:mac                           # dmg (arm64+x64); dist:win ใน CI
 2. **env race จาก import hoisting**: ตั้ง `process.env` ที่ main.ts ไม่รับประกัน module ที่ bundle มาอ่านทัน —
    embedding host ต้องส่ง paths ผ่าน args ของ `startServer()` ตรง ๆ
 3. Server ต้องเป็น library module (export `startServer`) + standalone entry แยกไฟล์ ไม่งั้น listen ซ้อน
+
+## เฟส 2 — เสร็จแล้ว (16 พ.ย. 2026)
+
+- **Settings UI** — หน้า "การตั้งค่า" ในแอป: เลือก provider (mock / OpenAI-compatible / Ollama),
+  base_url + model + API key — key เข้ารหัสด้วย **Electron safeStorage** (Keychain/DPAPI)
+  เก็บใน `userData/settings.json` (`key_stored_securely`); standalone เก็บ plain พร้อม flag เตือน
+- **Desktop tools** — `list_directory` / `read_text_file` (text-only, cap 64KB) / `reveal_path`
+  (Finder/Explorer) — เปิดเฉพาะแอบแพ็กเกจ (`SAGENT_ENABLE_FS_TOOLS=1`); ทดสอบ live: GLM เรียก
+  `list_directory` จริงและจบ run สมบูรณ์
+- **Auto-update** — electron-updater + publish GitHub Releases (ตรวจตอนเปิดแอป, ติดตั้งตอนออก)
+- **CI ครั้งแรก** — repo `rujirapongsn2/sagent-a2ui-poc` (private) → workflow_dispatch
+  → build matrix mac(2)+win(1) → artifacts; .exe ตัวแรกมาจาก runner ของ GitHub
+
+### API เพิ่ม
+- `GET /api/settings` → `{provider, base_url, model, has_api_key, key_stored_securely}` (ไม่คืน key)
+- `PUT /api/settings` `{provider, base_url?, model?, api_key?}` (api_key เว้นว่าง = คงเดิม, "" = ล้าง)
