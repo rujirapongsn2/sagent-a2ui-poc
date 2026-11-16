@@ -1,0 +1,75 @@
+{
+  "name": "sagent-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "sagent \u2014 desktop AI assistant (sagent engine \u00d7 A2UI v1.0)",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "esbuild main.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:electron-updater",
+    "start": "npm run build && electron .",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0"
+  },
+  "build": {
+    "appId": "ai.softnix.sagent",
+    "productName": "sagent",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../engine/sagent-engine",
+        "to": "engine/sagent-engine"
+      },
+      {
+        "from": "../app/dist",
+        "to": "app-dist"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "rujirapongsn2",
+        "repo": "sagent-a2ui-poc"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  }
+}

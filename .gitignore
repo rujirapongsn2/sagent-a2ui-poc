@@ -1,0 +1,13 @@
+# build artifacts
+app/dist/
+app/node_modules/
+desktop/dist/
+desktop/node_modules/
+desktop/release/
+engine/sagent-engine
+engine/sagent-engine.exe
+server/node_modules/
+*.log
+.DS_Store
+docs-design-*.png
+.runtime/

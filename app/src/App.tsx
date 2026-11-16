@@ -1,0 +1,443 @@
+import { useEffect, useRef, useState } from 'react';
+import { MessageProcessor } from '@a2ui/web_core';
+import { basicCatalog } from '@a2ui/web_core/catalogs/basic/v1';
+import { A2uiSurface } from '@a2ui/react';
+import './fonts.css';
+import './tokens.css';
+import './app.css';
+
+/* ---------- Lucide-style line icons (single stroke source, no dependency) ---------- */
+const sw = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.75, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+const Icon = {
+  Menu: (p: any) => <svg width={20} height={20} viewBox="0 0 24 24" {...sw} {...p}><line x1="4" y1="7" x2="20" y2="7" /><line x1="4" y1="12" x2="20" y2="12" /><line x1="4" y1="17" x2="20" y2="17" /></svg>,
+  Chat: (p: any) => <svg width={18} height={18} viewBox="0 0 24 24" {...sw} {...p}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>,
+  History: (p: any) => <svg width={18} height={18} viewBox="0 0 24 24" {...sw} {...p}><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l4 2" /></svg>,
+  Plug: (p: any) => <svg width={18} height={18} viewBox="0 0 24 24" {...sw} {...p}><path d="M9 2v6M15 2v6" /><path d="M6 8h12v4a6 6 0 0 1-12 0z" /><path d="M12 18v4" /></svg>,
+  Settings: (p: any) => <svg width={18} height={18} viewBox="0 0 24 24" {...sw} {...p}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>,
+  Sparkles: (p: any) => <svg width={18} height={18} viewBox="0 0 24 24" {...sw} {...p}><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" /><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z" /></svg>,
+  Send: (p: any) => <svg width={17} height={17} viewBox="0 0 24 24" {...sw} {...p}><path d="M22 2 11 13" /><path d="M22 2 15 22l-4-9-9-4z" /></svg>,
+  Chevron: (p: any) => <svg width={16} height={16} viewBox="0 0 24 24" {...sw} {...p}><path d="m6 9 6 6 6-6" /></svg>,
+  Check: (p: any) => <svg width={14} height={14} viewBox="0 0 24 24" {...sw} {...p}><path d="M20 6 9 17l-5-5" /></svg>,
+};
+
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  a2uiMessages?: unknown[];
+}
+
+/* Parse an SSE stream from a fetch Response without extra dependencies. */
+async function* sseStream(res: Response) {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep: number;
+    while ((sep = buffer.indexOf('\n\n')) >= 0) {
+      const chunk = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      let event = 'message';
+      let data = '';
+      for (const line of chunk.split('\n')) {
+        if (line.startsWith('event: ')) event = line.slice(7).trim();
+        else if (line.startsWith('data: ')) data += line.slice(6);
+      }
+      if (data) yield { event, data: JSON.parse(data) };
+    }
+  }
+}
+
+/* ---------- A2UI card (v1.0) rendered inside an assistant bubble ---------- */
+function A2uiCard({ messages, onAction }: { messages: unknown[]; onAction: (payload: unknown) => void }) {
+  // The processor's 2nd argument is the ActionListener: every dispatched
+  // action (e.g. Button press) lands here — the renderer→agent half of the
+  // round-trip.
+  const actionRef = useRef(onAction);
+  actionRef.current = onAction;
+  const [processor] = useState(
+    () => new MessageProcessor([basicCatalog], (action) => actionRef.current?.(action)),
+  );
+  const [surfaces, setSurfaces] = useState(() => Array.from(processor.model.surfacesMap.values()));
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      setError(null);
+      processor.processMessages(messages as any);
+    } catch (e: any) {
+      console.error('[a2ui] process failed', e);
+      setError(String(e?.message ?? e).slice(0, 300));
+    }
+    // processMessages runs synchronously: surface-created events fire before
+    // the subscriptions below attach, so sync the snapshot explicitly.
+    setSurfaces(Array.from(processor.model.surfacesMap.values()));
+    const subs = [
+      processor.onSurfaceCreated(() => setSurfaces(Array.from(processor.model.surfacesMap.values()))),
+      processor.onSurfaceDeleted(() => setSurfaces(Array.from(processor.model.surfacesMap.values()))),
+    ];
+    return () => subs.forEach((s: any) => s.unsubscribe?.());
+  }, [messages]);
+
+  if (error) return <div className="a2ui-error">[a2ui] {error}</div>;
+  if (surfaces.length === 0) return null;
+  return (
+    <div className="a2ui-card">
+      {surfaces.map((s: any) => (
+        <A2uiSurface key={s.id} surface={s} />
+      ))}
+    </div>
+  );
+}
+
+
+/* ---------- Settings (provider config → OS keychain) ---------- */
+function SettingsPanel() {
+  const [form, setForm] = useState<{provider: string; base_url: string; model: string; api_key: string} | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/settings').then((r) => r.json()).then((d) => {
+      if (!d.error) setForm({ provider: d.provider, base_url: d.base_url ?? '', model: d.model ?? '', api_key: '' });
+    }).catch(() => setForm({ provider: 'mock', base_url: '', model: '', api_key: '' }));
+  }, []);
+
+  async function save() {
+    if (!form || busy) return;
+    setBusy(true); setSaved(null); setError(null);
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider: form.provider,
+          base_url: form.base_url,
+          model: form.model,
+          ...(form.api_key.trim() !== '' ? { api_key: form.api_key } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      setSaved('บันทึกแล้ว');
+      setForm((f) => f ? { ...f!, api_key: '' } : f);
+    } catch (e: any) {
+      setError(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!form) return <div className="chat"><div className="chat__inner"><p className="hero__sub">กำลังโหลดการตั้งค่า…</p></div></div>;
+
+  const isLive = form.provider === 'openai_compat' || form.provider === 'ollama';
+  return (
+    <div className="chat">
+      <div className="chat__inner" style={{ maxWidth: 560, paddingTop: 'var(--sp-6)' }}>
+        <h2 className="hero__title" style={{ fontSize: 'var(--fs-heading)', textAlign: 'left', marginTop: 0 }}>
+          การเชื่อมต่อ <span className="grad">AI engine</span>
+        </h2>
+        <p className="hero__sub" style={{ textAlign: 'left', margin: 0, marginBottom: 'var(--sp-6)' }}>
+          เลือกผู้ให้บริการโมเดล — คีย์ถูกเก็บด้วยระบบ keystore ของเครื่อง (Keychain / Credential Manager)
+        </p>
+
+        <label className="field">
+          <span className="field__label">ผู้ให้บริการ</span>
+          <div className="field__row">
+            {([
+              ['mock', 'Mock (ทดสอบ)'],
+              ['openai_compat', 'OpenAI-compatible (GLM ฯลฯ)'],
+              ['ollama', 'Ollama (ออฟไลน์)'],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                className={`chip${form.provider === value ? ' chip--active' : ''}`}
+                onClick={() => setForm({ ...form, provider: value })}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </label>
+
+        {isLive && (
+          <>
+            <label className="field">
+              <span className="field__label">{form.provider === 'ollama' ? 'Base URL (เช่น http://127.0.0.1:11434 — เว้นว่างใช้ค่าเริ่มต้น)' : 'Base URL'}</span>
+              <input
+                className="input"
+                value={form.base_url}
+                onChange={(e) => setForm({ ...form, base_url: e.target.value })}
+                placeholder={form.provider === 'ollama' ? 'http://127.0.0.1:11434' : 'https://api.z.ai/api/coding/paas/v4'}
+              />
+            </label>
+            <label className="field">
+              <span className="field__label">โมเดล</span>
+              <input
+                className="input"
+                value={form.model}
+                onChange={(e) => setForm({ ...form, model: e.target.value })}
+                placeholder={form.provider === 'ollama' ? 'qwen3:8b' : 'glm-5.3-flash'}
+              />
+            </label>
+            {form.provider === 'openai_compat' && (
+              <label className="field">
+                <span className="field__label">API key</span>
+                <input
+                  className="input"
+                  type="password"
+                  value={form.api_key}
+                  onChange={(e) => setForm({ ...form, api_key: e.target.value })}
+                  placeholder="เว้นว่าง = ใช้คีย์เดิมที่บันทึกไว้"
+                  autoComplete="off"
+                />
+              </label>
+            )}
+          </>
+        )}
+
+        <div className="field__row" style={{ marginTop: 'var(--sp-6)' }}>
+          <button className="btn" onClick={save} disabled={busy} type="button">
+            <Icon.Check /> {busy ? 'กำลังบันทึก…' : 'บันทึกการตั้งค่า'}
+          </button>
+          {saved && <span style={{ color: 'var(--accent)', fontSize: 'var(--fs-label)' }}>{saved}</span>}
+          {error && <span className="a2ui-error">{error}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const SUGGESTIONS = [
+  'ช่วยจองโต๊ะอาหาร 4 คน พร้อมการ์ดยืนยัน',
+  'อธิบายว่าการ์ด A2UI ทำงานอย่างไร',
+];
+
+export default function App() {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [actionAck, setActionAck] = useState<string | null>(null);
+  const [provider, setProvider] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
+  const [view, setView] = useState<'chat' | 'settings'>('chat');
+  const scroller = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { scroller.current?.scrollTo({ top: 1e9 }); }, [messages, actionAck]);
+
+  async function send(text?: string) {
+    const message = (text ?? input).trim();
+    if (!message || busy) return;
+    setInput('');
+    setBusy(true);
+    const history = messages.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content }));
+    setMessages((prev) => [...prev, { role: 'user', content: message }, { role: 'assistant', content: '' }]);
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message, history }),
+      });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      let assistantText = '';
+      for await (const { event, data } of sseStream(res)) {
+        if (event === 'start') setProvider(data?.provider ?? null);
+        if (event === 'delta') {
+          // Engine emits {delta:{delta:"…",type:"text"}}; the adapter's own
+          // injected deltas use {delta:{text:"…"}} — accept both.
+          const d = data?.delta ?? {};
+          const piece: string = typeof d.text === 'string' ? d.text : (d.type === 'text' && typeof d.delta === 'string' ? d.delta : '');
+          if (piece) {
+            assistantText += piece;
+            setMessages((prev) => {
+              const next = [...prev];
+              next[next.length - 1] = { role: 'assistant', content: assistantText };
+              return next;
+            });
+          }
+        } else if (event === 'a2ui' && Array.isArray(data.messages)) {
+          setMessages((prev) => {
+            const next = [...prev];
+            next[next.length - 1] = { role: 'assistant', content: assistantText, a2uiMessages: data.messages };
+            return next;
+          });
+        } else if (event === 'done' && data?.ok === false) {
+          assistantText += `\n[engine error: ${data.error ?? data.stop_reason}]`;
+          setMessages((prev) => {
+            const next = [...prev];
+            next[next.length - 1] = { role: 'assistant', content: assistantText };
+            return next;
+          });
+        }
+      }
+    } catch (e: any) {
+      setMessages((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = { role: 'assistant', content: `[adapter error] ${e?.message ?? e}` };
+        return next;
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onAction(payload: unknown) {
+    try {
+      const res = await fetch('/api/action', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ payload, at: new Date().toISOString() }),
+      });
+      await res.json();
+      setActionAck(`${new Date().toLocaleTimeString()} — ได้รับ action จากการ์ดแล้ว`);
+      setTimeout(() => setActionAck(null), 4000);
+    } catch {
+      setActionAck('ส่ง action ไม่สำเร็จ');
+      setTimeout(() => setActionAck(null), 4000);
+    }
+  }
+
+  const lastIsTyping =
+    busy && messages.length > 0 &&
+    messages[messages.length - 1].role === 'assistant' &&
+    !messages[messages.length - 1].content;
+
+  return (
+    <div className="shell">
+      {menuOpen && <button className="sidebar-overlay" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
+
+      <aside className={`sidebar${menuOpen ? ' sidebar--open' : ''}`}>
+        <div className="sidebar__brand">
+          <span className="hero__orb" style={{ width: 32, height: 32 }}><Icon.Sparkles width={15} height={15} /></span>
+          <strong style={{ fontSize: 'var(--fs-title)', fontWeight: 600 }}>sagent</strong>
+        </div>
+        <nav className="sidebar__nav" aria-label="เมนูหลัก">
+          <button
+            className={`nav-item${view === 'chat' ? ' nav-item--active' : ''}`}
+            onClick={() => { setView('chat'); setMenuOpen(false); }}
+          >
+            <Icon.Chat /> บทสนทนา
+          </button>
+          <button className="nav-item" onClick={() => setMenuOpen(false)}>
+            <Icon.History /> ประวัติ
+          </button>
+          <button className="nav-item" onClick={() => setMenuOpen(false)}>
+            <Icon.Plug /> การเชื่อมต่อ
+          </button>
+          <button
+            className={`nav-item${view === 'settings' ? ' nav-item--active' : ''}`}
+            onClick={() => { setView('settings'); setMenuOpen(false); }}
+          >
+            <Icon.Settings /> การตั้งค่า
+          </button>
+        </nav>
+        <div className="sidebar__footer">
+          <span className="chip" style={{ cursor: 'default', boxShadow: 'none', background: 'transparent', color: 'var(--text-secondary)' }}>
+            engine: sagent · A2UI v1.0
+          </span>
+        </div>
+      </aside>
+
+      <div className="main">
+        <header className="toolbar">
+          <button
+            className="btn btn--ghost btn--icon mobile-only"
+            aria-label="เปิดเมนู"
+            onClick={() => setMenuOpen(true)}
+          >
+            <Icon.Menu />
+          </button>
+          <h1 className="toolbar__title">{view === 'settings' ? 'การตั้งค่า' : 'บทสนทนา'}</h1>
+
+          <div className="dropdown">
+            <button className="btn" onClick={() => setStatusOpen((v) => !v)} aria-expanded={statusOpen} aria-haspopup="menu">
+              <Icon.Sparkles width={15} height={15} />
+              {provider === 'openai_compat' ? 'GLM' : provider === 'mock' ? 'Mock engine' : 'AI engine'}
+              <Icon.Chevron />
+            </button>
+            {statusOpen && (
+              <div className="dropdown__menu" role="menu">
+                <div className="dropdown__item dropdown__item--active" role="menuitem">
+                  <span>{provider === 'openai_compat' ? 'GLM (openai_compat)' : 'Mock provider'}</span>
+                  <small>provider ที่ adapter ใช้อยู่ — สลับที่ server (SAGENT_PROVIDER)</small>
+                </div>
+                <div className="dropdown__item" role="menuitem" style={{ opacity: 0.6, cursor: 'default' }}>
+                  <span>Ollama (offline)</span>
+                  <small>พร้อมใช้ในเฟส 1</small>
+                </div>
+              </div>
+            )}
+          </div>
+        </header>
+
+        {view === 'settings' ? (
+          <SettingsPanel />
+        ) : (
+        <div className="chat" ref={scroller}>
+          {messages.length === 0 ? (
+            <div className="hero">
+              <span className="hero__orb"><Icon.Sparkles width={24} height={24} /></span>
+              <h2 className="hero__title">สวัสดีครับ <span className="grad">มีอะไรให้ช่วย?</span></h2>
+              <p className="hero__sub">ผู้ช่วย AI ที่ตอบข้อความและประกอบการ์ดอัตโนมัติ (A2UI v1.0) ได้ในบทสนทนา</p>
+              <div className="hero__chips">
+                {SUGGESTIONS.map((s) => (
+                  <button key={s} className="chip" onClick={() => send(s)}>{s}</button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="chat__inner">
+              {messages.map((m, i) => (
+                <div key={i} className={`msg msg--${m.role}`}>
+                  {m.role === 'assistant' && (
+                    <span className="msg__avatar msg__avatar--ai"><Icon.Sparkles width={13} height={13} /></span>
+                  )}
+                  <div className="msg__col">
+                    <div className="msg__bubble">
+                      {m.content || (lastIsTyping && i === messages.length - 1 ? (
+                        <span className="msg__typing" aria-label="กำลังพิมพ์"><i /><i /><i /></span>
+                      ) : '')}
+                      {m.a2uiMessages && <A2uiCard messages={m.a2uiMessages} onAction={onAction} />}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        )}
+
+        {view === 'chat' && (
+        <div className="composer-wrap">
+          <div className="composer">
+            <input
+              className="input"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
+              placeholder="พิมพ์ข้อความถึงผู้ช่วย…"
+              disabled={busy}
+              aria-label="ข้อความถึงผู้ช่วย"
+            />
+            <button className="btn btn--send" onClick={() => send()} disabled={busy || !input.trim()} aria-label="ส่งข้อความ">
+              <Icon.Send />
+            </button>
+          </div>
+        </div>
+        )}
+      </div>
+
+      {actionAck && (
+        <div className="toast" role="status">
+          <Icon.Check /> {actionAck}
+        </div>
+      )}
+    </div>
+  );
+}
