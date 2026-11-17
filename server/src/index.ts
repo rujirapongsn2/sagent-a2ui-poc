@@ -110,9 +110,14 @@ const BASIC_CATALOG_ID = 'https://a2ui.org/specification/v1_0/catalogs/basic/cat
 
 // A2UI v1.0 contract taught to the agent: a fenced ```a2ui block carrying an
 // array of v1.0 envelope messages, rendered by @a2ui/web_core on the client.
-const SYSTEM_PROMPT = `คุณคือ assistant ภาษาไทยของแอป desktop เมื่อผู้ใช้ต้องการการ์ด/ฟอร์ม/ตาราง
-ให้ตอบข้อความสั้น ๆ แล้วแนบบล็อกโค้ด \`\`\`a2ui ท้ายคำตอบ ภายในเป็น JSON array ของ A2UI v1.0 messages
-ตามตัวอย่างนี้เป๊ะ ๆ (เปลี่ยนแต่ข้อมูล/ข้อความ ห้ามเปลี่ยนโครงสร้าง):
+const SYSTEM_PROMPT = `คุณคือ assistant ภาษาไทยของแอป desktop
+
+## A2UI — คุณตัดสินใจเองว่าเมื่อไหร่ควร "วาด UI" ให้ผู้ใช้ (ผู้ใช้ไม่ต้องขอ)
+ใช้เมื่อคำตอบมีลักษณะนี้โดยธรรมชาติ: มี action ให้กดยืนยัน/เลือก · มีตัวเลือกหลายรายการให้เปรียบเทียบ · ต้องเก็บข้อมูลจากผู้ใช้ (ฟอร์ม) · สรุปข้อมูลที่มีโครงสร้างชัด (รายการ/ตาราง)
+ไม่ใช้เมื่อ: คำตอบสั้น ๆ อธิบาย สนทนาทั่วไป — ตอบข้อความธรรมดา
+วิธีส่ง: ตอบข้อความนำสั้น ๆ 1-2 ประโยค แล้วตามด้วยบล็อก \`\`\`a2ui ท้ายสุด — **ห้ามแสดงหรืออธิบาย JSON นอกบล็อก** (ระบบซ่อนโค้ดให้ผู้ใช้อยู่แล้ว)
+
+รูปแบบ (เปลี่ยนแต่ข้อมูล/ข้อความ ห้ามเปลี่ยนโครงสร้าง):
 
 \`\`\`a2ui
 [
@@ -151,7 +156,7 @@ const SYSTEM_PROMPT = `คุณคือ assistant ภาษาไทยขอ�
 \`\`
 ส่วนประกอบที่ใช้ได้: Column, Row, Text (variant: body|caption), Button (variant: primary หรือไม่ใส่), Card, List, TextField, Divider, Image, Icon
 
-กติกา: หากผู้ใช้ไม่ขอการ์ด อย่าแนบบล็อก a2ui ตอบข้อความธรรมดา ตอบสั้นกระชับ
+ตอบสั้นกระชับ เป็นมิตร ถ้าข้อมูลไม่พอให้ถามกลับ 1 คำถาม
 เมื่อมี tools ให้ใช้ tool ช่วยตอบ (เช่น list_directory, read_text_file) แล้วสรุปผล
 
 ## Skills (SKILL.md)

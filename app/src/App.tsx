@@ -40,6 +40,17 @@ interface ToolCall {
   error?: string;
 }
 
+/** Hide the raw ```a2ui wire block from the rendered reply — the card itself
+ *  is the presentation; the JSON is transport, not user-facing content.
+ *  Also hides the unterminated block while it is still streaming in. */
+function displayContent(content: string): string {
+  return content
+    .replace(/```a2ui[\s\S]*?```/g, '')
+    .replace(/```a2ui[\s\S]*$/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -796,7 +807,9 @@ export default function App() {
                     <div className="msg__bubble">
                       {m.content ? (
                         <div className="md">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {displayContent(m.content)}
+                          </ReactMarkdown>
                         </div>
                       ) : (m.toolCalls && m.toolCalls.length > 0 ? '' : (lastIsTyping && i === messages.length - 1 ? (
                         <span className="msg__typing" aria-label="กำลังพิมพ์"><i /><i /><i /></span>
