@@ -1,7 +1,7 @@
 // sagent desktop — Electron main process.
 // Runs the adapter HTTP server in-process (loopback only) and serves the
 // built Vite app; the sagent-engine stays a sidecar subprocess per run.
-import { app, BrowserWindow, shell, safeStorage } from 'electron';
+import { app, BrowserWindow, shell, safeStorage, ipcMain, dialog } from 'electron';
 import path from 'node:path';
 import { randomInt } from 'node:crypto';
 import { startServer } from '../server/src/index.js';
@@ -18,9 +18,30 @@ const appDist = packaged
   : path.join(__dirname, '../../app/dist');
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 const historyPath = path.join(app.getPath('userData'), 'conversations');
+const uploadsPath = path.join(app.getPath('userData'), 'uploads');
 const skillsPath = path.join(app.getPath('userData'), 'skills');
 
 const PORT = 47000 + randomInt(0, 1000);
+
+// Native file picker for chat attachments. On macOS the open panel's Media
+// section exposes the Photos library — picking from it copies the photo out,
+// so no extra photo-library entitlement is needed.
+ipcMain.handle('pick-files', async () => {
+  const r = await dialog.showOpenDialog({
+    title: 'เลือกไฟล์ที่จะแนบ',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'เอกสารและรูปภาพ', extensions: [
+        'txt', 'md', 'json', 'yaml', 'yml', 'toml', 'csv', 'tsv', 'log', 'xml', 'html', 'css',
+        'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'rs', 'go', 'java', 'c', 'h', 'cpp', 'sh',
+        'pdf', 'docx', 'xlsx', 'pptx',
+        'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'tiff', 'svg',
+      ] },
+      { name: 'ทุกไฟล์', extensions: ['*'] },
+    ],
+  });
+  return r.canceled || !r.filePaths.length ? null : r.filePaths;
+});
 
 // Desktop tools run as the local user — enabled in the packaged app.
 if (packaged) process.env.SAGENT_ENABLE_FS_TOOLS = '1';
@@ -45,6 +66,7 @@ async function createWindow() {
     settingsPath,
     historyPath,
     skillsPath,
+    uploadsPath,
     enableFsTools: true, // deterministic: never depend on env-set timing
     secureStore: safeStorage.isEncryptionAvailable() ? secureStore : undefined,
   });
@@ -61,6 +83,7 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      preload: path.join(__dirname, 'preload.js'),
     },
   });
 

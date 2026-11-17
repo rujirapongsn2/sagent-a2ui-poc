@@ -269,6 +269,16 @@
   transition: box-shadow var(--t-fast), color var(--t-fast), border-color var(--t-fast);
 }
 .chip:hover { box-shadow: var(--shadow-2); color: var(--accent); border-color: var(--accent-secondary); }
+/* Attachment chips above the composer */
+.attach-chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.chip--attach { cursor: default; }
+.chip__x {
+  margin-left: var(--sp-2); border: 0; background: transparent; cursor: pointer;
+  color: var(--text-secondary); font-size: 11px; padding: 2px 4px; border-radius: var(--r-pill);
+}
+.chip__x:hover { background: var(--accent-tint-strong); color: var(--accent); }
+.composer__attach { flex: none; color: var(--text-secondary); }
+.composer__attach:hover { color: var(--accent); }
 
 /* ---------- Messages ---------- */
 .msg { display: flex; }

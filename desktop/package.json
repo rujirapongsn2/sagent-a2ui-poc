@@ -5,7 +5,7 @@
   "description": "sagent \u2014 desktop AI assistant (sagent engine \u00d7 A2UI v1.0)",
   "main": "dist/main.cjs",
   "scripts": {
-    "build": "esbuild main.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:electron-updater",
+    "build": "esbuild main.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:electron-updater && node -e \"require('fs').copyFileSync('preload.js','dist/preload.js')\"",
     "start": "npm run build && electron .",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win"

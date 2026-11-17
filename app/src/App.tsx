@@ -30,14 +30,48 @@ const Icon = {
   AlertCircle: (p: any) => <svg width={14} height={14} viewBox="0 0 24 24" {...sw} {...p}><circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" /></svg>,
 };
 
-interface ToolCall {
-  id: string;
+interface ToolCall {  id: string;
   name: string;
   arguments: Record<string, unknown>;
   status: 'running' | 'done' | 'error';
   latency_ms?: number;
   result?: unknown;
   error?: string;
+}
+
+/** A file staged for the next message (already stored server-side). */
+interface Attachment {
+  id: string;
+  name: string;
+  path: string;
+  kind: 'text' | 'image' | 'binary';
+  size: number;
+}
+
+/** native picker (desktop app) — window.sagentDesktop comes from preload.js */
+async function pickAndUpload(): Promise<Attachment[]> {
+  const bridge = (window as any).sagentDesktop;
+  if (bridge?.pickFiles) {
+    const paths: string[] | null = await bridge.pickFiles();
+    if (!paths?.length) return [];
+    const res = await fetch('/api/uploads', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ paths }),
+    });
+    if (!res.ok) throw new Error(`upload ${res.status}`);
+    return (await res.json()).attachments ?? [];
+  }
+  // Web fallback: the caller opens <input type=file> instead.
+  return [];
+}
+
+function readAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1] ?? '');
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
 }
 
 /** Hide the raw ```a2ui wire block from the rendered reply — the card itself
@@ -519,6 +553,8 @@ const SUGGESTIONS = [
 export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
+  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionAck, setActionAck] = useState<string | null>(null);
   const [provider, setProvider] = useState<string | null>(null);
@@ -585,21 +621,26 @@ export default function App() {
 
   async function send(text?: string) {
     const message = (text ?? input).trim();
-    if (!message || busy) return;
+    const atts = pendingAttachments;
+    if ((!message && !atts.length) || busy) return;
     setInput('');
+    setPendingAttachments([]);
     setBusy(true);
     const history = messages
       .filter((m) => m.content)
       // Strip the a2ui wire blocks from history: the engine only needs the
       // conversational context (cuts tokens, stops the model echoing old JSON).
       .map((m) => ({ role: m.role, content: displayContent(m.content) }));
-    setMessages((prev) => [...prev, { role: 'user', content: message }, { role: 'assistant', content: '' }]);
+    // The chat transcript shows a compact 📎 line so the attachment is part of
+    // the remembered conversation.
+    const displayMsg = message + (atts.length ? `\n\n📎 ${atts.map((a) => a.name).join(', ')}` : '');
+    setMessages((prev) => [...prev, { role: 'user', content: displayMsg }, { role: 'assistant', content: '' }]);
 
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ message, history }),
+        body: JSON.stringify({ message, history, attachments: atts }),
       });
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       let assistantText = '';
@@ -831,7 +872,59 @@ export default function App() {
 
         {view === 'chat' && (
         <div className="composer-wrap">
+          {pendingAttachments.length > 0 && (
+            <div className="attach-chips" role="list" aria-label="ไฟล์แนบ">
+              {pendingAttachments.map((a) => (
+                <span className="chip chip--attach" key={a.id} role="listitem">
+                  {a.kind === 'image' ? '🖼' : a.kind === 'text' ? '📄' : '📦'} {a.name}
+                  <button
+                    className="chip__x"
+                    aria-label={`เอา ${a.name} ออก`}
+                    onClick={() => setPendingAttachments((prev) => prev.filter((x) => x.id !== a.id))}
+                  >✕</button>
+                </span>
+              ))}
+            </div>
+          )}
           <div className="composer">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              onChange={async (e) => {
+                const files = [...(e.target.files ?? [])];
+                e.target.value = '';
+                if (!files.length) return;
+                try {
+                  const res = await fetch('/api/uploads', {
+                    method: 'POST', headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ files: await Promise.all(files.map(async (f) => ({ name: f.name, content_b64: await readAsBase64(f) }))) }),
+                  });
+                  if (!res.ok) throw new Error(`upload ${res.status}`);
+                  const { attachments: uploaded } = await res.json();
+                  setPendingAttachments((prev) => [...prev, ...(uploaded ?? [])]);
+                } catch (err) { console.error(err); }
+              }}
+            />
+            <button
+              className="btn btn--icon composer__attach"
+              onClick={async () => {
+                // Desktop app: native picker (also reaches macOS Photos via
+                // the open panel's Media section). Browser dev: file input.
+                if ((window as any).sagentDesktop?.pickFiles) {
+                  try {
+                    const picked = await pickAndUpload();
+                    setPendingAttachments((prev) => [...prev, ...picked]);
+                  } catch (err) { console.error(err); }
+                } else { fileInputRef.current?.click(); }
+              }}
+              disabled={busy}
+              aria-label="แนบไฟล์"
+              title="แนบไฟล์ (macOS: เลือกจาก Photos ได้ผ่านส่วน Media)"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
             <input
               className="input"
               value={input}
@@ -841,7 +934,7 @@ export default function App() {
               disabled={busy}
               aria-label="ข้อความถึงผู้ช่วย"
             />
-            <button className="btn btn--send" onClick={() => send()} disabled={busy || !input.trim()} aria-label="ส่งข้อความ">
+            <button className="btn btn--send" onClick={() => send()} disabled={busy || (!input.trim() && !pendingAttachments.length)} aria-label="ส่งข้อความ">
               <Icon.Send />
             </button>
           </div>

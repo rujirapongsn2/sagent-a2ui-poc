@@ -12,4 +12,5 @@ startServer({
   settingsPath: path.resolve(HERE, '../../.runtime/settings.json'),
   historyPath: path.resolve(HERE, '../../.runtime/conversations'),
   skillsPath: path.resolve(HERE, '../../.runtime/skills'),
+  uploadsPath: path.resolve(HERE, '../../.runtime/uploads'),
 });

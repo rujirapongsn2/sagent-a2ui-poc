@@ -40,6 +40,7 @@ function fsToolsEnabled(): boolean {
 
 let settingsStore: SettingsStore | null = null;
 let historyStore: HistoryStore | null = null;
+let uploadStore: UploadStore | null = null;
 let skillStore: SkillStore | null = null;
 
 /** Build the sagent LlmConfig for this run from settings/env defaults. */
@@ -161,6 +162,9 @@ const SYSTEM_PROMPT = `คุณคือ assistant ภาษาไทยขอ�
 ตอบสั้นกระชับ เป็นมิตร ถ้าข้อมูลไม่พอให้ถามกลับ 1 คำถาม
 เมื่อมี tools ให้ใช้ tool ช่วยตอบ (เช่น list_directory, read_text_file) แล้วสรุปผล
 
+## ไฟล์ที่ผู้ใช้แนบมา
+ข้อความอาจมีส่วน "## ไฟล์ที่ผู้ใช้แนบมา" ต่อท้าย: ไฟล์ข้อความเล็กมาพร้อมเนื้อหาเต็มใน <file name="…"> (ใช้ตอบได้ทันที ไม่ต้องอ่านซ้ำ) ส่วนไฟล์ใหญ่/รูปภาพบอกแค่ path — ใช้ read_text_file อ่านเมื่อต้องการ อ้างอิงไฟล์ด้วยชื่อ พูดถึงว่าได้รับไฟล์อะไร
+
 ## กฎการทำงานกับไฟล์ (สำคัญ — ความน่าเชื่อถือของคุณ)
 - ทุกการสร้าง/แก้ไข/ลบไฟล์ **ต้องเรียก tool จริงทุกครั้ง** — ห้ามตอบว่า "ทำเรียบร้อย" ถ้ายังไม่ได้เรียก tool และเห็นผลลัพธ์สำเร็จ
 - แก้ไขไฟล์: ถ้าเป็นการเปลี่ยนบางส่วน → เรียก read_text_file ดูก่อน แล้วใช้ edit_file (find/replace เป๊ะ) — ถ้าเปลี่ยนทั้งไฟล์จึงใช้ write_file
@@ -207,6 +211,7 @@ const MOCK_CARD = [
 interface ChatBody {
   message?: string;
   history?: { role: string; content: string }[];
+  attachments?: { name: string; path: string; kind?: string; size?: number }[];
 }
 
 function readBody(req: IncomingMessage): Promise<ChatBody> {
@@ -250,8 +255,25 @@ function extractA2ui(text: string): { messages: unknown[] } | null {
 }
 
 async function runEngine(body: ChatBody, res: ServerResponse) {
-  const prompt = (body.message ?? '').trim();
-  if (!prompt) { res.writeHead(400); res.end(JSON.stringify({ error: 'message required' })); return; }
+  const prompt0 = (body.message ?? '').trim();
+  if (!prompt0 && !(Array.isArray(body?.attachments) && body.attachments.length)) { res.writeHead(400); res.end(JSON.stringify({ error: 'message required' })); return; }
+  // Attachments: small text files are inlined for immediate processing;
+  // everything else (images, big files) is referenced by stored path so the
+  // agent can read it with its file tools.
+  let attachmentBlock = '';
+  const atts = Array.isArray(body?.attachments) ? body.attachments : [];
+  if (atts.length && uploadStore) {
+    const lines: string[] = [];
+    for (const a of atts) {
+      if (!a || typeof a.path !== 'string' || !a.path.startsWith('/')) continue;
+      const inline = uploadStore.inlineIfText(a);
+      lines.push(inline !== null
+        ? `- ${a.name} (ไฟล์ข้อความ, เนื้อหาเต็มด้านล่าง)\n<file name="${a.name}">\n${inline}\n</file>`
+        : `- ${a.name} (${a.kind}, ${(a.size ?? 0 / 1024) | 0} KB, path: ${a.path}) — อ่านได้ด้วย read_text_file`);
+    }
+    if (lines.length) attachmentBlock = `\n\n## ไฟล์ที่ผู้ใช้แนบมา\n${lines.join('\n')}`;
+  }
+  const prompt = prompt0 + attachmentBlock;
   const rawHistory = Array.isArray(body.history) ? body.history.filter((m) => m && typeof m.content === 'string') : [];
   // sagent requires strictly alternating user/assistant pairs starting with
   // 'user' — drop any leading/stray assistant messages (e.g. the welcome note).
@@ -420,6 +442,28 @@ const server = createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/api/chat') {
     try { await runEngine(await readBody(req), res); }
     catch (e: any) { if (!res.headersSent) { res.writeHead(400); } res.end(JSON.stringify({ error: String(e?.message ?? e) })); }
+    return;
+  }
+
+  // ---- File uploads (agent-processable attachments) ----
+  // Electron native picker sends {paths:[...]}; the web dev fallback sends
+  // {files:[{name, content_b64}]}. Both land in the uploads dir and come
+  // back as attachment descriptors the chat can reference.
+  if (req.method === 'POST' && req.url === '/api/uploads') {
+    try {
+      if (!uploadStore) { res.writeHead(501); res.end(JSON.stringify({ error: 'uploads not configured' })); return; }
+      const body = await readBody(req);
+      const out: Attachment[] = [];
+      for (const p of Array.isArray(body?.paths) ? body.paths : []) {
+        if (typeof p === 'string' && p.startsWith('/')) out.push(uploadStore.fromPath(p));
+      }
+      for (const f of Array.isArray(body?.files) ? body.files : []) {
+        if (f && typeof f.name === 'string' && typeof f.content_b64 === 'string') out.push(uploadStore.fromBytes(f.name, f.content_b64));
+      }
+      if (!out.length) { res.writeHead(400); res.end(JSON.stringify({ error: 'no valid files' })); return; }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ attachments: out }));
+    } catch (e: any) { if (!res.headersSent) res.writeHead(400); res.end(JSON.stringify({ error: String(e?.message ?? e) })); }
     return;
   }
 
@@ -615,13 +659,14 @@ const server = createServer(async (req, res) => {
 
 // Library module: exports the server without side effects. The standalone
 // entry (standalone.ts) and the Electron main both import from here.
-export function startServer(opts?: { port?: number; host?: string; enginePath?: string; appDist?: string; settingsPath?: string; historyPath?: string; skillsPath?: string; enableFsTools?: boolean; secureStore?: SecureStore }) {
+export function startServer(opts?: { port?: number; host?: number | string; enginePath?: string; appDist?: string; settingsPath?: string; historyPath?: string; skillsPath?: string; uploadsPath?: string; enableFsTools?: boolean; secureStore?: SecureStore }) {
   const port = opts?.port ?? PORT;
   const host = opts?.host ?? HOST;
   if (opts?.enginePath) ENGINE = opts.enginePath;
   if (opts?.appDist) APP_DIST = opts.appDist;
   if (opts?.settingsPath) settingsStore = new SettingsStore(opts.settingsPath, opts?.secureStore);
   if (opts?.historyPath) historyStore = new HistoryStore(opts.historyPath);
+  if (opts?.uploadsPath) uploadStore = new UploadStore(opts.uploadsPath);
   if (opts?.skillsPath) skillStore = new SkillStore(opts.skillsPath);
   if (opts?.enableFsTools) fsToolsForced = true;
   return new Promise<ReturnType<typeof server.listen>>((resolve) => {
