@@ -50,13 +50,28 @@ async function extractPdfText(pdfPath: string): Promise<string | null> {
   }
 }
 
-/** After storing a file, give PDFs a text-layer companion (.txt) so the agent
- *  can read them like any text file. Returns patch fields for the attachment. */
-async function pdfCompanion(dest: string): Promise<Partial<Attachment> | null> {
-  if (path.extname(dest).toLowerCase() !== '.pdf') return null;
-  const text = await extractPdfText(dest);
+/** Extract a .docx body with mammoth (docx = zipped XML; pure JS, works on
+ *  macOS and Windows). Tables come through as tab-separated rows. */
+async function extractDocxText(docxPath: string): Promise<string | null> {
+  try {
+    const mod: any = await import('mammoth');
+    const mammoth = mod.default ?? mod;
+    const { value } = await mammoth.extractRawText({ path: docxPath });
+    const text = String(value ?? '').trim();
+    return text.length >= 20 ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+/** After storing a file, give document formats a text companion (.txt) so the
+ *  agent can read them like any text file. Returns patch fields. */
+async function fileCompanion(dest: string): Promise<Partial<Attachment> | null> {
+  const ext = path.extname(dest).toLowerCase();
+  if (ext !== '.pdf' && ext !== '.docx') return null;
+  const text = ext === '.pdf' ? await extractPdfText(dest) : await extractDocxText(dest);
   if (!text) return null;
-  const txtPath = dest.replace(/\.pdf$/i, '.extracted.txt');
+  const txtPath = dest.replace(/\.(pdf|docx)$/i, '.extracted.txt');
   writeFileSync(txtPath, text, 'utf8');
   return { kind: 'text', textPath: txtPath };
 }
@@ -76,7 +91,7 @@ export class UploadStore {
     const dest = path.join(this.root, `${id}__${name}`);
     copyFileSync(sourcePath, dest);
     return { id, name, path: dest, kind: kindOf(name), size: statSync(dest).size,
-      ...(await pdfCompanion(dest)) };
+      ...(await fileCompanion(dest)) };
   }
 
   /** From bytes (web fallback). */
@@ -86,7 +101,7 @@ export class UploadStore {
     const dest = path.join(this.root, `${id}__${safe}`);
     writeFileSync(dest, Buffer.from(base64, 'base64'));
     return { id, name: safe, path: dest, kind: kindOf(safe), size: statSync(dest).size,
-      ...(await pdfCompanion(dest)) };
+      ...(await fileCompanion(dest)) };
   }
 
   /** Small text files are inlined into the prompt so the model can read them
