@@ -3,13 +3,15 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { SettingsStore, type SecureStore } from './settings.js';
 import { HistoryStore, type HistoryMessage } from './history.js';
+
 import { SkillStore } from './skills.js';
+import { UploadStore, type Attachment } from './uploads.js';
 import { DESKTOP_TOOLS, executeDesktopTool } from './tools.js';
 
 // Resolve this file's directory in BOTH module worlds: ESM (tsx/dev) and the
@@ -599,11 +601,12 @@ const server = createServer(async (req, res) => {
 
   // Static assets from the built Vite app (production-style single origin).
   const asset = path.join(APP_DIST, decodeURIComponent((req.url ?? '/').split('?')[0]));
-  if (req.method === 'GET' && asset.startsWith(APP_DIST) && existsSync(asset)) {
-    const ext = path.extname(asset);
+  const assetFile = asset.endsWith('/') ? path.join(asset, 'index.html') : asset;
+  if (req.method === 'GET' && assetFile.startsWith(APP_DIST) && existsSync(assetFile) && statSync(assetFile).isFile()) {
+    const ext = path.extname(assetFile);
     const types: Record<string, string> = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
     res.writeHead(200, { 'Content-Type': types[ext] ?? 'application/octet-stream' });
-    res.end(readFileSync(asset));
+    res.end(readFileSync(assetFile));
     return;
   }
 

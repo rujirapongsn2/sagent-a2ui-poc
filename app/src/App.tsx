@@ -704,6 +704,7 @@ export default function App() {
       <aside className={`sidebar${menuOpen ? ' sidebar--open' : ''}`}>
         <div className="sidebar__brand">
           <span className="hero__orb" style={{ width: 32, height: 32 }}><Icon.Sparkles width={15} height={15} /></span>
+          <img src="softnix-logo.png" alt="Softnix" style={{ height: 22, width: 'auto', display: 'block' }} />
           <strong style={{ fontSize: 'var(--fs-title)', fontWeight: 600 }}>sagent</strong>
         </div>
         <nav className="sidebar__nav" aria-label="เมนูหลัก">

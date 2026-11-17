@@ -273,6 +273,17 @@
 /* ---------- Messages ---------- */
 .msg { display: flex; }
 .msg--user { justify-content: flex-end; }
+.msg--assistant { justify-content: flex-start; }
+/* Column shrink-wraps to its widest child so bubbles size to their content
+   (question: hugs right, answer: hugs left) instead of stretching full-width. */
+.msg__col {
+  max-width: 78%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.msg--user .msg__col { align-items: flex-end; }
 .msg__avatar {
   width: 30px;
   height: 30px;
@@ -286,7 +297,7 @@
   background: var(--accent-grad);
   color: #fff;
 }
-.msg__col { max-width: 78%; min-width: 0; }
+.msg__col { min-width: 0; }
 .msg__bubble {
   border-radius: var(--r-card);
   padding: var(--sp-4) var(--sp-5);
@@ -336,9 +347,9 @@
    app without any renderer fork. */
 .a2ui-card {
   --a2ui-color-primary: var(--accent);
-  --a2ui-color-primary-hover: #6E69F5;
-  --a2ui-color-primary-dark: #4F4AD6;
-  --a2ui-color-primary-light: #EEEDFE;
+  --a2ui-color-primary-hover: #3D97CE;
+  --a2ui-color-primary-dark: #1B6899;
+  --a2ui-color-primary-light: #F0F7FC;
   --a2ui-color-on-primary: #FFFFFF;
   --a2ui-color-secondary: var(--accent-secondary);
   --a2ui-color-on-secondary: var(--text-primary);

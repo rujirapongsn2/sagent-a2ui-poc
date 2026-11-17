@@ -1,6 +1,6 @@
 // Conversation history: JSON files under a conversations directory
 // (Electron userData in the packaged app, .runtime/ in standalone dev).
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
