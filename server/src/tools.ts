@@ -71,6 +71,19 @@ export const DESKTOP_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'edit_file',
+    description: 'Edit a text file with an exact find→replace. The find string must match exactly once (error otherwise). More reliable than rewriting the whole file for small edits.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Absolute file path' },
+        find: { type: 'string', description: 'Exact text to find (must be unique in the file)' },
+        replace: { type: 'string', description: 'Replacement text' },
+      },
+      required: ['path', 'find', 'replace'],
+    },
+  },
+  {
     name: 'write_file',
     description: 'Create or overwrite a UTF-8 text file with the given content. Parent directories are created if missing. Text extensions only.',
     parameters: {
@@ -158,6 +171,21 @@ export async function executeDesktopTool(name: string, args: Record<string, unkn
     if (stat.size > 2_000_000) throw new Error('file too large (>2MB)');
     const content = readFileSync(target, 'utf8').slice(0, maxBytes);
     return { path: target, bytes: Math.min(stat.size, maxBytes), truncated: stat.size > maxBytes, content };
+  }
+
+  if (name === 'edit_file') {
+    const find = typeof args?.find === 'string' ? args.find : null;
+    const replace = typeof args?.replace === 'string' ? args.replace : null;
+    if (find === null || replace === null || !find) throw new Error('find/replace must be non-empty strings');
+    if (!TEXT_EXTS.has(path.extname(target).toLowerCase())) {
+      throw new Error(`refusing to edit non-text extension "${path.extname(target)}"`);
+    }
+    const original = readFileSync(target, 'utf8');
+    const count = original.split(find).length - 1;
+    if (count === 0) throw new Error('ไม่พบข้อความที่ระบุในไฟล์ (find ต้องตรงเป๊ะ)');
+    if (count > 1) throw new Error(`พบข้อความนี้ ${count} จุด — ระบุให้ยาวขึ้นเพื่อให้ตรงจุดเดียว`);
+    writeFileSync(target, original.replace(find, replace), 'utf8');
+    return { path: target, replaced: 1, bytes: Buffer.byteLength(original, 'utf8') };
   }
 
   if (name === 'write_file' || name === 'create_file') {

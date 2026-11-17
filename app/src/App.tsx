@@ -588,7 +588,11 @@ export default function App() {
     if (!message || busy) return;
     setInput('');
     setBusy(true);
-    const history = messages.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content }));
+    const history = messages
+      .filter((m) => m.content)
+      // Strip the a2ui wire blocks from history: the engine only needs the
+      // conversational context (cuts tokens, stops the model echoing old JSON).
+      .map((m) => ({ role: m.role, content: displayContent(m.content) }));
     setMessages((prev) => [...prev, { role: 'user', content: message }, { role: 'assistant', content: '' }]);
 
     try {
