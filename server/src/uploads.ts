@@ -10,6 +10,8 @@ export interface Attachment {
   name: string;
   /** absolute stored path */
   path: string;
+  /** for PDFs with a text layer: the extracted .txt the agent can read */
+  textPath?: string;
   kind: 'text' | 'image' | 'binary';
   size: number;
 }
@@ -32,6 +34,33 @@ function safeName(name: string): string {
   return name.replace(/[\\/]/g, '_').slice(0, 120) || 'file';
 }
 
+/** Extract a PDF's text layer with pdf-parse (pure JS — works on macOS and
+ *  Windows alike). Dynamic import keeps it out of module-load time; the
+ *  subpath import skips the package's test-file debug branch. Returns null
+ *  for scanned/image-only PDFs (no text layer). */
+async function extractPdfText(pdfPath: string): Promise<string | null> {
+  try {
+    const mod: any = await import('pdf-parse/lib/pdf-parse.js');
+    const pdf = mod.default ?? mod;
+    const data = await pdf(pdfPath);
+    const text = String(data?.text ?? '').trim();
+    return text.length >= 20 ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+/** After storing a file, give PDFs a text-layer companion (.txt) so the agent
+ *  can read them like any text file. Returns patch fields for the attachment. */
+async function pdfCompanion(dest: string): Promise<Partial<Attachment> | null> {
+  if (path.extname(dest).toLowerCase() !== '.pdf') return null;
+  const text = await extractPdfText(dest);
+  if (!text) return null;
+  const txtPath = dest.replace(/\.pdf$/i, '.extracted.txt');
+  writeFileSync(txtPath, text, 'utf8');
+  return { kind: 'text', textPath: txtPath };
+}
+
 export class UploadStore {
   private root: string;
 
@@ -41,27 +70,34 @@ export class UploadStore {
   }
 
   /** From a local absolute path (Electron picker / Photos library copy). */
-  fromPath(sourcePath: string): Attachment {
+  async fromPath(sourcePath: string): Promise<Attachment> {
     const name = safeName(path.basename(sourcePath));
     const id = randomUUID().slice(0, 8);
     const dest = path.join(this.root, `${id}__${name}`);
     copyFileSync(sourcePath, dest);
-    return { id, name, path: dest, kind: kindOf(name), size: statSync(dest).size };
+    return { id, name, path: dest, kind: kindOf(name), size: statSync(dest).size,
+      ...(await pdfCompanion(dest)) };
   }
 
   /** From bytes (web fallback). */
-  fromBytes(name: string, base64: string): Attachment {
+  async fromBytes(name: string, base64: string): Promise<Attachment> {
     const safe = safeName(name);
     const id = randomUUID().slice(0, 8);
     const dest = path.join(this.root, `${id}__${safe}`);
     writeFileSync(dest, Buffer.from(base64, 'base64'));
-    return { id, name: safe, path: dest, kind: kindOf(safe), size: statSync(dest).size };
+    return { id, name: safe, path: dest, kind: kindOf(safe), size: statSync(dest).size,
+      ...(await pdfCompanion(dest)) };
   }
 
   /** Small text files are inlined into the prompt so the model can read them
-   *  without a tool round-trip. */
+   *  without a tool round-trip. PDFs read via their extracted text companion. */
   inlineIfText(att: Attachment, maxBytes = 16_000): string | null {
-    if (att.kind !== 'text' || att.size > maxBytes) return null;
-    try { return readFileSync(att.path, 'utf8'); } catch { return null; }
+    if (att.kind !== 'text') return null;
+    const source = att.textPath ?? att.path;
+    try {
+      const stat = statSync(source);
+      if (stat.size > maxBytes) return null;
+      return readFileSync(source, 'utf8');
+    } catch { return null; }
   }
 }

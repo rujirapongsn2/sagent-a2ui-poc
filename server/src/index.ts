@@ -267,9 +267,10 @@ async function runEngine(body: ChatBody, res: ServerResponse) {
     for (const a of atts) {
       if (!a || typeof a.path !== 'string' || !a.path.startsWith('/')) continue;
       const inline = uploadStore.inlineIfText(a);
+      const readable = (a as any).textPath ?? a.path;
       lines.push(inline !== null
         ? `- ${a.name} (ไฟล์ข้อความ, เนื้อหาเต็มด้านล่าง)\n<file name="${a.name}">\n${inline}\n</file>`
-        : `- ${a.name} (${a.kind}, ${(a.size ?? 0 / 1024) | 0} KB, path: ${a.path}) — อ่านได้ด้วย read_text_file`);
+        : `- ${a.name} (${a.kind}, path: ${readable}) — อ่านได้ด้วย read_text_file`);
     }
     if (lines.length) attachmentBlock = `\n\n## ไฟล์ที่ผู้ใช้แนบมา\n${lines.join('\n')}`;
   }
@@ -455,10 +456,10 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const out: Attachment[] = [];
       for (const p of Array.isArray(body?.paths) ? body.paths : []) {
-        if (typeof p === 'string' && p.startsWith('/')) out.push(uploadStore.fromPath(p));
+        if (typeof p === 'string' && p.startsWith('/')) out.push(await uploadStore.fromPath(p));
       }
       for (const f of Array.isArray(body?.files) ? body.files : []) {
-        if (f && typeof f.name === 'string' && typeof f.content_b64 === 'string') out.push(uploadStore.fromBytes(f.name, f.content_b64));
+        if (f && typeof f.name === 'string' && typeof f.content_b64 === 'string') out.push(await uploadStore.fromBytes(f.name, f.content_b64));
       }
       if (!out.length) { res.writeHead(400); res.end(JSON.stringify({ error: 'no valid files' })); return; }
       res.writeHead(200, { 'Content-Type': 'application/json' });
