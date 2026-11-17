@@ -90,6 +90,9 @@ interface ChatMessage {
   content: string;
   a2uiMessages?: unknown[];
   toolCalls?: ToolCall[];
+  /** Files attached with this message — kept in the transcript so the
+   *  conversation's attachment context survives follow-up turns. */
+  attachments?: Attachment[];
 }
 
 /* Parse an SSE stream from a fetch Response without extra dependencies. */
@@ -588,7 +591,7 @@ export default function App() {
       const res = await fetch(`/api/conversations/${id}`);
       if (!res.ok) return;
       const conv = await res.json();
-      setMessages((conv.messages ?? []).map((m: any) => ({ role: m.role, content: m.content, a2uiMessages: m.a2uiMessages, toolCalls: m.toolCalls })));
+      setMessages((conv.messages ?? []).map((m: any) => ({ role: m.role, content: m.content, a2uiMessages: m.a2uiMessages, toolCalls: m.toolCalls, attachments: m.attachments })));
       setActiveConvId(id);
       setView('chat');
     } catch { /* keep list */ }
@@ -631,16 +634,23 @@ export default function App() {
       // Strip the a2ui wire blocks from history: the engine only needs the
       // conversational context (cuts tokens, stops the model echoing old JSON).
       .map((m) => ({ role: m.role, content: displayContent(m.content) }));
+    // Conversation-scoped attachments: every file attached earlier in this
+    // conversation rides along with each new message, so follow-ups like
+    // "สรุปเป็น bullet points" still reach the file the user attached turns ago.
+    const convAttachments: Attachment[] = [
+      ...messages.flatMap((m) => (m.role === 'user' ? (m.attachments ?? []) : [])),
+      ...atts,
+    ];
     // The chat transcript shows a compact 📎 line so the attachment is part of
     // the remembered conversation.
     const displayMsg = message + (atts.length ? `\n\n📎 ${atts.map((a) => a.name).join(', ')}` : '');
-    setMessages((prev) => [...prev, { role: 'user', content: displayMsg }, { role: 'assistant', content: '' }]);
+    setMessages((prev) => [...prev, { role: 'user', content: displayMsg, attachments: atts.length ? atts : undefined }, { role: 'assistant', content: '' }]);
 
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ message, history, attachments: atts }),
+        body: JSON.stringify({ message, history, attachments: convAttachments }),
       });
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       let assistantText = '';
