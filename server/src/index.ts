@@ -6,8 +6,10 @@ import readline from 'node:readline';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import { SettingsStore, type SecureStore } from './settings.js';
 import { HistoryStore, type HistoryMessage } from './history.js';
+import { SkillStore } from './skills.js';
 import { DESKTOP_TOOLS, executeDesktopTool } from './tools.js';
 
 // Resolve this file's directory in BOTH module worlds: ESM (tsx/dev) and the
@@ -26,10 +28,17 @@ const HOST = process.env.HOST ?? '127.0.0.1';
 // Provider config resolves in priority order per run:
 //   saved Settings (Settings UI) → env (SAGENT_PROVIDER / GLM_*) → mock.
 const ENV_PROVIDER = process.env.SAGENT_PROVIDER ?? 'mock';
-const ENABLE_FS_TOOLS = process.env.SAGENT_ENABLE_FS_TOOLS === '1';
+// Read LAZILY per request: the Electron host sets this env AFTER this module
+// evaluates (import hoisting) — caching at load time silently drops every
+// desktop tool in the packaged app.
+let fsToolsForced = false;
+function fsToolsEnabled(): boolean {
+  return fsToolsForced || process.env.SAGENT_ENABLE_FS_TOOLS === '1';
+}
 
 let settingsStore: SettingsStore | null = null;
 let historyStore: HistoryStore | null = null;
+let skillStore: SkillStore | null = null;
 
 /** Build the sagent LlmConfig for this run from settings/env defaults. */
 function llmConfigForRun() {
@@ -59,13 +68,38 @@ function llmConfigForRun() {
 
 function toolDefinitions() {
   const defs = [{ name: 'demo', description: 'Demo tool proving the tool round-trip', parameters: { type: 'object' } }];
-  if (ENABLE_FS_TOOLS) defs.push(...DESKTOP_TOOLS);
+  if (fsToolsEnabled()) defs.push(...DESKTOP_TOOLS);
   return defs;
 }
 
 async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   if (name === 'demo') return { ok: true, by: 'adapter' };
-  if (ENABLE_FS_TOOLS && DESKTOP_TOOLS.some((t) => t.name === name)) {
+  // Skills are always available (they are the agent's own capability layer).
+  if (name === 'list_skills') {
+    return { skills: skillStore?.list() ?? [] };
+  }
+  if (name === 'read_skill') {
+    const skill = skillStore?.get(String(args?.name ?? ''));
+    if (!skill) throw new Error(`ไม่พบ skill "${args?.name}"`);
+    if (skill.markdown.length > 32_000) throw new Error('skill ใหญ่เกิน 32KB');
+    return { name: skill.name, markdown: skill.markdown };
+  }
+  if (name === 'save_skill') {
+    if (!skillStore) throw new Error('skill store unavailable');
+    const mode = args?.mode === 'update' ? 'update' : 'create';
+    return skillStore.save({
+      name: String(args?.name ?? ''),
+      description: String(args?.description ?? ''),
+      body: String(args?.body ?? ''),
+      mode,
+    });
+  }
+  if (name === 'delete_skill') {
+    const ok = skillStore?.delete(String(args?.name ?? '')) ?? false;
+    if (!ok) throw new Error(`ลบไม่สำเร็จ: ไม่พบ skill "${args?.name}"`);
+    return { deleted: String(args?.name) };
+  }
+  if (fsToolsEnabled() && DESKTOP_TOOLS.some((t) => t.name === name)) {
     return await executeDesktopTool(name, args);
   }
   throw new Error(`unknown tool: ${name}`);
@@ -118,7 +152,15 @@ const SYSTEM_PROMPT = `คุณคือ assistant ภาษาไทยขอ�
 ส่วนประกอบที่ใช้ได้: Column, Row, Text (variant: body|caption), Button (variant: primary หรือไม่ใส่), Card, List, TextField, Divider, Image, Icon
 
 กติกา: หากผู้ใช้ไม่ขอการ์ด อย่าแนบบล็อก a2ui ตอบข้อความธรรมดา ตอบสั้นกระชับ
-เมื่อมี tools ให้ใช้ tool ช่วยตอบ (เช่น list_directory, read_text_file) แล้วสรุปผล`;
+เมื่อมี tools ให้ใช้ tool ช่วยตอบ (เช่น list_directory, read_text_file) แล้วสรุปผล
+
+## Skills (SKILL.md)
+คุณมีระบบ skills (มาตรฐาน SKILL.md แบบ Hermes) — จัดการผ่าน tools เท่านั้น:
+- ใช้ skill: list_skills → read_skill(name) → ทำตามคำแนะนำใน SKILL.md ก่อนตอบ
+- สร้าง/แก้: save_skill (ส่ง body เป็น markdown ไม่รวม --- frontmatter, description ≤60 ตัวอักษร, mode create/update)
+- ลบ: delete_skill
+- **ห้ามสร้าง/เขียนไฟล์ SKILL.md เองด้วย write_file/create_file เด็ดขาด และห้ามแตะ ~/.hermes หรือโฟลเดอร์ skills ด้วยมือ — ใช้ save_skill/delete_skill เท่านั้น**
+- skill ที่ดี: คำสั่งเป็นขั้นตอน ระบุเงื่อนไขการใช้ บอกข้อควรระวัง ไม่ใช่บันทึกย่อ`;
 
 // Mock-mode demo card: proves the renderer + action round-trip without an LLM.
 // Shape follows the official catalogs/basic/v1/examples/scaffold-interactive-
@@ -207,10 +249,11 @@ async function runEngine(body: ChatBody, res: ServerResponse) {
   }
 
   const config = llmConfigForRun();
+  const runtimeContext = `\n\n## บริบทเครื่องผู้ใช้\n- home: ${os.homedir()}\n- platform: ${process.platform} (${process.arch})\n- เมื่อผู้ใช้ถามถึง "folder ปัจจุบัน" ให้เข้าใจว่าคือการทำงานกับระบบไฟล์ของผู้ใช้ — เริ่มจาก home ข้างบน`;
   const payload = {
     protocol: 1,
     prompt,
-    system_prompt: config.provider === 'openai_compat' ? SYSTEM_PROMPT : '',
+    system_prompt: (config.provider === 'openai_compat' ? SYSTEM_PROMPT : '') + runtimeContext,
     messages: history,
     config: { ...config, max_turns: 12 },
     tools: toolDefinitions(),
@@ -418,6 +461,68 @@ const server = createServer(async (req, res) => {
     }
   }
 
+  // ---- Skills (SKILL.md) ----
+  const skillMatch = req.url?.match(/^\/api\/skills\/([a-z0-9-]+)$/);
+  if (req.url === '/api/skills' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ skills: skillStore?.list() ?? [] }));
+    return;
+  }
+  if (req.url === '/api/skills' && req.method === 'POST') {
+    if (!skillStore) { res.writeHead(503); res.end('{}'); return; }
+    const body = await readBody(req).catch(() => null);
+    try {
+      const skill = skillStore.save({
+        name: String(body?.name ?? ''),
+        description: String(body?.description ?? ''),
+        body: String(body?.body ?? ''),
+        mode: 'create',
+      });
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(skill));
+    } catch (e: any) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: String(e?.message ?? e) }));
+    }
+    return;
+  }
+  if (skillMatch) {
+    const name = skillMatch[1];
+    if (req.method === 'GET') {
+      const skill = skillStore?.get(name) ?? null;
+      if (!skill) { res.writeHead(404); res.end('{}'); } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(skill));
+      }
+      return;
+    }
+    if (req.method === 'PUT') {
+      if (!skillStore) { res.writeHead(503); res.end('{}'); return; }
+      const body = await readBody(req).catch(() => null);
+      try {
+        const existing = skillStore.get(name);
+        if (!existing) throw new Error(`ไม่พบ skill "${name}"`);
+        const skill = skillStore.save({
+          name,
+          description: String(body?.description ?? existing.description),
+          body: String(body?.body ?? ''),
+          mode: 'update',
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(skill));
+      } catch (e: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: String(e?.message ?? e) }));
+      }
+      return;
+    }
+    if (req.method === 'DELETE') {
+      const ok = skillStore?.delete(name) ?? false;
+      res.writeHead(ok ? 200 : 404); res.end('{}');
+      return;
+    }
+  }
+
   if (req.method === 'POST' && req.url === '/api/settings/test') {
     const body = await readBody(req).catch(() => null);
     const result = await testLlmConnection({
@@ -496,13 +601,15 @@ const server = createServer(async (req, res) => {
 
 // Library module: exports the server without side effects. The standalone
 // entry (standalone.ts) and the Electron main both import from here.
-export function startServer(opts?: { port?: number; host?: string; enginePath?: string; appDist?: string; settingsPath?: string; historyPath?: string; secureStore?: SecureStore }) {
+export function startServer(opts?: { port?: number; host?: string; enginePath?: string; appDist?: string; settingsPath?: string; historyPath?: string; skillsPath?: string; enableFsTools?: boolean; secureStore?: SecureStore }) {
   const port = opts?.port ?? PORT;
   const host = opts?.host ?? HOST;
   if (opts?.enginePath) ENGINE = opts.enginePath;
   if (opts?.appDist) APP_DIST = opts.appDist;
   if (opts?.settingsPath) settingsStore = new SettingsStore(opts.settingsPath, opts?.secureStore);
   if (opts?.historyPath) historyStore = new HistoryStore(opts.historyPath);
+  if (opts?.skillsPath) skillStore = new SkillStore(opts.skillsPath);
+  if (opts?.enableFsTools) fsToolsForced = true;
   return new Promise<ReturnType<typeof server.listen>>((resolve) => {
     const handle = server.listen(port, host, () => {
       console.log(`sagent-a2ui adapter on http://${host}:${port} | provider=${settingsStore ? settingsStore.view().provider : ENV_PROVIDER} | engine=${ENGINE}`);

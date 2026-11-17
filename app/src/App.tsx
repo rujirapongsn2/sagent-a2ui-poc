@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { MessageProcessor } from '@a2ui/web_core';
 import { basicCatalog } from '@a2ui/web_core/catalogs/basic/v1';
 import { A2uiSurface } from '@a2ui/react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import './fonts.css';
 import './tokens.css';
 import './app.css';
@@ -350,6 +352,117 @@ function SettingsPanel() {
 }
 
 
+
+/* ---------- Skills (SKILL.md) management ---------- */
+interface SkillItem { name: string; description: string; version?: string }
+
+function SkillsPanel() {
+  const [skills, setSkills] = useState<SkillItem[]>([]);
+  const [editing, setEditing] = useState<{ mode: 'create' | 'update'; name: string; description: string; body: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function refresh() {
+    try {
+      const res = await fetch('/api/skills');
+      const data = await res.json();
+      if (Array.isArray(data.skills)) setSkills(data.skills);
+    } catch { /* keep */ }
+  }
+  useEffect(() => { void refresh(); }, []);
+
+  async function loadForEdit(name: string) {
+    setError(null);
+    try {
+      const res = await fetch(`/api/skills/${name}`);
+      const skill = await res.json();
+      const body = String(skill.markdown ?? '').replace(/^---[\s\S]*?---\n?/, '');
+      setEditing({ mode: 'update', name, description: skill.description ?? '', body });
+    } catch (e: any) { setError(String(e?.message ?? e)); }
+  }
+
+  async function save() {
+    if (!editing || busy) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await fetch(editing.mode === 'create' ? '/api/skills' : `/api/skills/${editing.name}`, {
+        method: editing.mode === 'create' ? 'POST' : 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: editing.name, description: editing.description, body: editing.body }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      setEditing(null);
+      void refresh();
+    } catch (e: any) { setError(String(e?.message ?? e)); } finally { setBusy(false); }
+  }
+
+  async function remove(name: string) {
+    await fetch(`/api/skills/${name}`, { method: 'DELETE' }).catch(() => null);
+    void refresh();
+  }
+
+  return (
+    <div className="chat">
+      <div className="chat__inner" style={{ maxWidth: 640, paddingTop: 'var(--sp-6)' }}>
+        <div className="field__row" style={{ justifyContent: 'space-between', marginBottom: 'var(--sp-6)', width: '100%' }}>
+          <h2 className="hero__title" style={{ fontSize: 'var(--fs-heading)', margin: 0 }}>
+            <span className="grad">ทักษะ</span>ของผู้ช่วย
+          </h2>
+          <button className="btn" type="button" onClick={() => setEditing({ mode: 'create', name: '', description: '', body: '' })}>
+            <Icon.FilePlus /> สร้างทักษะ
+          </button>
+        </div>
+
+        {error && <div className="a2ui-error" style={{ marginBottom: 'var(--sp-3)' }}>{error}</div>}
+
+        {editing && (
+          <div className="skill-editor">
+            <label className="field">
+              <span className="field__label">ชื่อ (a-z 0-9 ขีดกลาง{editing.mode === 'update' ? ' — แก้ไม่ได้' : ''})</span>
+              <input className="input" value={editing.name} disabled={editing.mode === 'update'}
+                onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="เช่น meeting-notes" />
+            </label>
+            <label className="field">
+              <span className="field__label">คำอธิบาย ({editing.description.length}/60)</span>
+              <input className="input" value={editing.description} maxLength={60}
+                onChange={(e) => setEditing({ ...editing, description: e.target.value })}
+                placeholder="Use when ต้องการ… (≤60 ตัวอักษร)" />
+            </label>
+            <label className="field">
+              <span className="field__label">เนื้อหา (markdown — ไม่ต้องใส่ --- frontmatter)</span>
+              <textarea className="input skill-editor__body" value={editing.body} rows={10}
+                onChange={(e) => setEditing({ ...editing, body: e.target.value })}
+                placeholder={'# ชื่อทักษะ\n\nเมื่อไหร่ใช้ / ขั้นตอน / ข้อควรระวัง'} />
+            </label>
+            <div className="field__row">
+              <button className="btn" onClick={save} disabled={busy} type="button">
+                <Icon.Check /> {busy ? 'กำลังบันทึก…' : editing.mode === 'create' ? 'สร้าง' : 'บันทึกการแก้ไข'}
+              </button>
+              <button className="btn btn--ghost" onClick={() => setEditing(null)} type="button">ยกเลิก</button>
+            </div>
+          </div>
+        )}
+
+        {skills.length === 0 && !editing && (
+          <p className="hero__sub" style={{ textAlign: 'left' }}>ยังไม่มีทักษะ — สร้างเอง หรือสั่งผู้ช่วยในแชทก็ได้ ("ช่วยสร้าง skill สำหรับ…")</p>
+        )}
+        {skills.map((sk) => (
+          <div key={sk.name} className="conv-row">
+            <button className="conv-row__main" onClick={() => loadForEdit(sk.name)} type="button">
+              <span className="conv-row__title">{sk.name}{sk.version ? <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}> · v{sk.version}</span> : null}</span>
+              <span className="conv-row__date" style={{ whiteSpace: 'normal' }}>{sk.description}</span>
+            </button>
+            <button className="btn btn--ghost btn--icon" onClick={() => remove(sk.name)} aria-label={`ลบ ${sk.name}`} type="button">
+              <Icon.Trash />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- Conversation history ---------- */
 function HistoryPanel({ conversations, onOpen, onDelete, onNew }: {
   conversations: Array<{ id: string; title: string; updated_at: string }>;
@@ -400,7 +513,7 @@ export default function App() {
   const [provider, setProvider] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
-  const [view, setView] = useState<'chat' | 'settings' | 'history'>('chat');
+  const [view, setView] = useState<'chat' | 'settings' | 'history' | 'skills'>('chat');
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Array<{ id: string; title: string; updated_at: string }>>([]);
   const scroller = useRef<HTMLDivElement>(null);
@@ -586,6 +699,12 @@ export default function App() {
             <Icon.Chat /> บทสนทนา
           </button>
           <button
+            className={`nav-item${view === 'skills' ? ' nav-item--active' : ''}`}
+            onClick={() => { setView('skills'); setMenuOpen(false); }}
+          >
+            <Icon.Box /> ทักษะ
+          </button>
+          <button
             className={`nav-item${view === 'history' ? ' nav-item--active' : ''}`}
             onClick={() => { setView('history'); setMenuOpen(false); }}
           >
@@ -617,7 +736,13 @@ export default function App() {
           >
             <Icon.Menu />
           </button>
-          <h1 className="toolbar__title">{view === 'settings' ? 'การตั้งค่า' : view === 'history' ? 'ประวัติ' : 'บทสนทนา'}</h1>
+          <h1 className="toolbar__title">{view === 'settings' ? 'การตั้งค่า' : view === 'history' ? 'ประวัติ' : view === 'skills' ? 'ทักษะ' : 'บทสนทนา'}</h1>
+
+          {view === 'chat' && (
+            <button className="btn" onClick={newConversation} type="button" title="เริ่มบทสนทนาใหม่">
+              <Icon.FilePlus /> บทสนทนาใหม่
+            </button>
+          )}
 
           <div className="dropdown">
             <button className="btn" onClick={() => setStatusOpen((v) => !v)} aria-expanded={statusOpen} aria-haspopup="menu">
@@ -642,6 +767,8 @@ export default function App() {
 
         {view === 'settings' ? (
           <SettingsPanel />
+        ) : view === 'skills' ? (
+          <SkillsPanel />
         ) : view === 'history' ? (
           <HistoryPanel conversations={conversations} onOpen={openConversation} onDelete={deleteConversation} onNew={newConversation} />
         ) : (
@@ -667,7 +794,11 @@ export default function App() {
                   <div className="msg__col">
                     {(m.toolCalls ?? []).map((c) => <ToolCallRow key={c.id} call={c} />)}
                     <div className="msg__bubble">
-                      {m.content || (m.toolCalls && m.toolCalls.length > 0 ? '' : (lastIsTyping && i === messages.length - 1 ? (
+                      {m.content ? (
+                        <div className="md">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                        </div>
+                      ) : (m.toolCalls && m.toolCalls.length > 0 ? '' : (lastIsTyping && i === messages.length - 1 ? (
                         <span className="msg__typing" aria-label="กำลังพิมพ์"><i /><i /><i /></span>
                       ) : ''))}
                       {m.a2uiMessages && <A2uiCard messages={m.a2uiMessages} onAction={onAction} />}

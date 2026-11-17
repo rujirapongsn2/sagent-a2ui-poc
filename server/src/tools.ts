@@ -13,6 +13,43 @@ export interface ToolDef {
 
 export const DESKTOP_TOOLS: ToolDef[] = [
   {
+    name: 'list_skills',
+    description: 'List installed skills (SKILL.md standard): name + description of each.',
+    parameters: { type: 'object' },
+  },
+  {
+    name: 'read_skill',
+    description: 'Load a skill SKILL.md into context. Read it BEFORE following the skill.',
+    parameters: {
+      type: 'object',
+      properties: { name: { type: 'string', description: 'Skill name from list_skills' } },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'save_skill',
+    description: 'Create or update a skill (SKILL.md). Frontmatter is added automatically — provide body as markdown without the --- block. description max 60 chars.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'slug a-z 0-9 dash' },
+        description: { type: 'string', description: 'One sentence, trigger-first, max 60 chars' },
+        body: { type: 'string', description: 'Markdown body (no frontmatter)' },
+        mode: { type: 'string', description: '"create" or "update"' },
+      },
+      required: ['name', 'description', 'body', 'mode'],
+    },
+  },
+  {
+    name: 'delete_skill',
+    description: 'Delete a skill and its folder.',
+    parameters: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    },
+  },
+  {
     name: 'list_directory',
     description: 'List entries of a directory on the user machine. Returns name, is_dir, size bytes. Max 200 entries.',
     parameters: {

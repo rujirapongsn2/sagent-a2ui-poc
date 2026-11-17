@@ -18,6 +18,7 @@ const appDist = packaged
   : path.join(__dirname, '../../app/dist');
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 const historyPath = path.join(app.getPath('userData'), 'conversations');
+const skillsPath = path.join(app.getPath('userData'), 'skills');
 
 const PORT = 47000 + randomInt(0, 1000);
 
@@ -43,6 +44,8 @@ async function createWindow() {
     appDist,
     settingsPath,
     historyPath,
+    skillsPath,
+    enableFsTools: true, // deterministic: never depend on env-set timing
     secureStore: safeStorage.isEncryptionAvailable() ? secureStore : undefined,
   });
 
