@@ -1,6 +1,6 @@
 {
   "name": "sagent-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "sagent \u2014 desktop AI assistant (sagent engine \u00d7 A2UI v1.0)",
   "main": "dist/main.cjs",
