@@ -400,7 +400,100 @@ function SettingsPanel() {
             </div>
           )}
         </div>
+
+        <UpdateSection />
       </div>
+    </div>
+  );
+}
+
+/* ---------- App update (desktop only) ---------- */
+interface UpdateStateInfo {
+  supported: boolean;
+  status: 'idle' | 'checking' | 'uptodate' | 'available' | 'downloading' | 'downloaded' | 'error';
+  currentVersion: string;
+  newVersion: string | null;
+  progress: number;
+  error: string | null;
+}
+
+function UpdateSection() {
+  const bridge = (window as any).sagentDesktop;
+  const [state, setState] = useState<UpdateStateInfo | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  // Poll update state while mounted (progress ticks during download).
+  useEffect(() => {
+    if (!bridge?.updateState) return;
+    let alive = true;
+    const poll = async () => {
+      try {
+        const s: UpdateStateInfo = await bridge.updateState();
+        if (alive) setState(s);
+      } catch { /* bridge gone */ }
+    };
+    void poll();
+    const t = setInterval(poll, 1000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  if (!bridge?.updateState) return null; // web dev: no updater
+  if (state && !state.supported) return null; // not packaged / no feed
+
+  const statusText: Record<string, string> = {
+    idle: 'ยังไม่ได้ตรวจ',
+    checking: 'กำลังตรวจสอบ…',
+    uptodate: 'แอปเป็นเวอร์ชันล่าสุดแล้ว',
+    available: `พบเวอร์ชันใหม่ ${state?.newVersion ?? ''}`,
+    downloading: `กำลังดาวน์โหลด ${state?.progress ?? 0}%`,
+    downloaded: 'ดาวน์โหลดเสร็จ — พร้อมติดตั้ง',
+    error: 'ตรวจสอบไม่สำเร็จ (อาจออฟไลน์)',
+  };
+
+  return (
+    <div className="field__row" style={{ marginTop: 'var(--sp-6)', paddingTop: 'var(--sp-5)', borderTop: '1px solid var(--border)', flexDirection: 'column', alignItems: 'flex-start', gap: 'var(--sp-3)' }}>
+      <div>
+        <strong style={{ fontSize: 'var(--fs-body-lg)' }}>อัปเดตแอป</strong>
+        <div style={{ fontSize: 'var(--fs-label)', color: 'var(--text-secondary)', marginTop: 4 }}>
+          เวอร์ชันปัจจุบัน {state?.currentVersion ?? '—'} · {state ? statusText[state.status] : '…'}
+        </div>
+      </div>
+
+      {state?.status === 'downloading' && (
+        <div style={{ width: '100%', height: 6, background: 'var(--accent-tint-strong)', borderRadius: 'var(--r-pill)', overflow: 'hidden' }}>
+          <div style={{ width: `${state.progress}%`, height: '100%', background: 'var(--accent)', transition: 'width 300ms ease' }} />
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 'var(--sp-2)', flexWrap: 'wrap' }}>
+        {(state?.status === 'idle' || state?.status === 'error' || state?.status === 'uptodate') && (
+          <button className="btn" onClick={() => bridge.updateCheck()} type="button">ตรวจหาอัปเดต</button>
+        )}
+        {state?.status === 'available' && (
+          <button className="btn" onClick={() => bridge.updateDownload()} type="button">ดาวน์โหลดเวอร์ชันใหม่</button>
+        )}
+        {state?.status === 'downloaded' && !confirming && (
+          <button className="btn btn--send" style={{ padding: '10px 18px' }} onClick={() => setConfirming(true)} type="button">
+            ติดตั้งอัปเดต
+          </button>
+        )}
+      </div>
+
+      {confirming && state?.status === 'downloaded' && (
+        <div role="alertdialog" aria-label="ยืนยันการรีสตาร์ท" style={{ width: '100%', padding: 'var(--sp-4)', border: '1px solid var(--border)', borderRadius: 'var(--r-card)', background: 'var(--accent-tint)' }}>
+          <div style={{ fontSize: 'var(--fs-body)', marginBottom: 'var(--sp-3)' }}>
+            การติดตั้งต้อง<strong>ปิดและเปิดแอปใหม่</strong> — ยืนยันที่จะรีสตาร์ทตอนนี้หรือไม่?
+          </div>
+          <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+            <button className="btn btn--send" style={{ padding: '10px 18px' }} onClick={() => bridge.updateInstall()} type="button">
+              รีสตาร์ทเลย
+            </button>
+            <button className="btn btn--ghost" onClick={() => setConfirming(false)} type="button">
+              ภายหลัง (ติดตั้งตอนปิดแอป)
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

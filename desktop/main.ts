@@ -99,19 +99,75 @@ async function createWindow() {
 
 // Auto-update: only when packaged AND a publish feed is configured
 // (electron-builder `publish` below). Dev runs skip silently.
-async function setupAutoUpdate() {
+// ---- App update (electron-updater → GitHub releases) ----
+// Exposed to the renderer as explicit actions: check → download (progress)
+// → user-confirmed restart. Falls back to install-on-quit silently.
+let updater: any = null;
+const updateState = {
+  supported: false,
+  status: 'idle' as 'idle' | 'checking' | 'uptodate' | 'available' | 'downloading' | 'downloaded' | 'error',
+  currentVersion: app.getVersion(),
+  newVersion: null as string | null,
+  progress: 0, // 0-100
+  error: null as string | null,
+};
+
+async function initUpdater() {
   if (!app.isPackaged) return;
   try {
     const { autoUpdater } = await import('electron-updater');
-    autoUpdater.autoDownload = true;
+    autoUpdater.autoDownload = false; // user triggers download from the UI
     autoUpdater.autoInstallOnAppQuit = true;
-    autoUpdater.on('update-downloaded', (info) => {
-      console.log(`[update] downloaded v${info.version} — installs on quit`);
+    autoUpdater.on('update-available', (info: any) => {
+      updateState.status = 'available';
+      updateState.newVersion = info?.version ?? null;
     });
-    const result = await autoUpdater.checkForUpdates();
-    console.log(`[update] check: ${result?.updateInfo?.version ?? 'n/a'}`);
+    autoUpdater.on('update-not-available', () => { updateState.status = 'uptodate'; });
+    autoUpdater.on('download-progress', (p: any) => {
+      updateState.status = 'downloading';
+      updateState.progress = Math.round(p?.percent ?? 0);
+    });
+    autoUpdater.on('update-downloaded', (info: any) => {
+      updateState.status = 'downloaded';
+      updateState.newVersion = info?.version ?? updateState.newVersion;
+    });
+    autoUpdater.on('error', (e: any) => {
+      updateState.status = 'error';
+      updateState.error = String(e?.message ?? e).slice(0, 200);
+    });
+    updater = autoUpdater;
+    updateState.supported = true;
   } catch (e) {
     console.log(`[update] unavailable: ${String(e).slice(0, 120)}`);
+  }
+}
+
+ipcMain.handle('update-state', () => ({ ...updateState }));
+ipcMain.handle('update-check', async () => {
+  if (!updater) return { ...updateState };
+  try { updateState.status = 'checking'; await updater.checkForUpdates(); }
+  catch (e: any) { updateState.status = 'error'; updateState.error = String(e?.message ?? e).slice(0, 200); }
+  return { ...updateState };
+});
+ipcMain.handle('update-download', async () => {
+  if (!updater) return { ...updateState };
+  try { updateState.status = 'downloading'; await updater.downloadUpdate(); }
+  catch (e: any) { updateState.status = 'error'; updateState.error = String(e?.message ?? e).slice(0, 200); }
+  return { ...updateState };
+});
+// Restart happens ONLY after the user confirms in the UI.
+ipcMain.handle('update-install', () => {
+  if (!updater) return false;
+  updater.quitAndInstall(false, true);
+  return true;
+});
+
+async function setupAutoUpdate() {
+  await initUpdater();
+  if (updater) {
+    try {
+      await updater.checkForUpdates(); // background check; download stays manual
+    } catch { /* offline etc. — the UI button lets the user retry */ }
   }
 }
 
