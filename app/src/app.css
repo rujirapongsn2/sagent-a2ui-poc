@@ -280,6 +280,41 @@
 .composer__attach { flex: none; color: var(--text-secondary); }
 .composer__attach:hover { color: var(--accent); }
 
+/* ---------- Live activity + answer actions ---------- */
+.msg__activity {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  padding: 6px 12px; margin-bottom: var(--sp-2);
+  background: var(--accent-tint); border-radius: var(--r-pill);
+  font-size: var(--fs-caption); color: var(--text-body-muted);
+}
+.msg__activity-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent);
+  animation: msg-pulse 1.2s ease-in-out infinite;
+}
+.msg__activity-timer { color: var(--accent); font-variant-numeric: tabular-nums; }
+@keyframes msg-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 0 rgba(39, 134, 194, 0.35); }
+  50% { transform: scale(1.25); opacity: 0.7; box-shadow: 0 0 0 6px rgba(39, 134, 194, 0); }
+}
+.msg__actions {
+  display: inline-flex; align-items: center; gap: 2px;
+  margin-top: var(--sp-2); opacity: 0; transition: opacity var(--t-fast);
+}
+.msg:hover .msg__actions, .msg__actions:focus-within { opacity: 1; }
+.msg__action {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border: 0; background: transparent; cursor: pointer;
+  color: var(--text-secondary); border-radius: var(--r-control);
+  transition: color var(--t-fast), background var(--t-fast);
+}
+.msg__action:hover { color: var(--accent); background: var(--accent-tint-strong); }
+.msg__action--on { color: var(--accent); }
+.msg__tokens {
+  margin-left: var(--sp-2); font-size: var(--fs-caption);
+  color: var(--text-secondary); font-variant-numeric: tabular-nums;
+}
+
 /* ---------- Messages ---------- */
 .msg { display: flex; }
 .msg--user { justify-content: flex-end; }

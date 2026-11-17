@@ -312,11 +312,25 @@ async function runEngine(body: ChatBody, res: ServerResponse) {
 
   let finalText = '';
 
+  let lastUsage: { input?: number; output?: number; totalTokens?: number } | null = null;
+  // The Rust engine currently reports usage as all-zeros; estimate from the
+  // actual wire text instead (Thai ≈ 2.5 chars/token, Latin ≈ 4) and mark it
+  // approximate on the client. Replace with real numbers once the engine
+  // forwards provider usage.
+  const estTokens = (s: string): number => {
+    const thai = (s.match(/[\u0E00-\u0E7F]/g) ?? []).length;
+    const other = s.length - thai;
+    return Math.round(thai / 2.5 + other / 4);
+  };
   rl.on('line', async (line) => {
     let frame: any;
     try { frame = JSON.parse(line); } catch { return; }
     if (frame.kind === 'event' && frame.event?.type === 'messageUpdate') {
       // sagent streams deltas; forward as-is for the client to assemble.
+      // The engine attaches cumulative token usage to each delta — remember
+      // the latest so the final 'done' can report it.
+      const u = frame.event?.message?.usage;
+      if (u && typeof u === 'object') lastUsage = u;
       sseSend(res, 'delta', frame.event);
     } else if (frame.kind === 'tool_request') {
       // Tool activity is SYSTEM truth (not model prose): both events are
@@ -338,7 +352,17 @@ async function runEngine(body: ChatBody, res: ServerResponse) {
       child.stdin.write(JSON.stringify(reply) + '\n');
     } else if (frame.kind === 'done') {
       finalText = frame.text ?? '';
-      sseSend(res, 'done', { ok: frame.ok, stop_reason: frame.stop_reason, error: frame.error ?? null });
+      // Real usage if the engine ever forwards it; otherwise estimate.
+      const usage = (lastUsage && (lastUsage.totalTokens ?? 0) > 0)
+        ? lastUsage
+        : (() => {
+            const input = estTokens(payload.system_prompt) + estTokens(prompt)
+              + history.reduce((n, m) => n + estTokens(m.content), 0);
+            const output = estTokens(finalText);
+            return { input, output, totalTokens: input + output };
+          })();
+      sseSend(res, 'done', { ok: frame.ok, stop_reason: frame.stop_reason, error: frame.error ?? null,
+        usage, usage_estimated: !(lastUsage && (lastUsage.totalTokens ?? 0) > 0) });
     } else if (frame.kind === 'error') {
       sseSend(res, 'done', { ok: false, stop_reason: 'error', error: frame.message });
     }

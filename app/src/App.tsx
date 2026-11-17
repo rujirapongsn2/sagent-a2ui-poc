@@ -93,6 +93,12 @@ interface ChatMessage {
   /** Files attached with this message — kept in the transcript so the
    *  conversation's attachment context survives follow-up turns. */
   attachments?: Attachment[];
+  /** Token usage reported by the engine on completion. */
+  usage?: { input?: number; output?: number; totalTokens?: number };
+  /** true when tokens were estimated (engine did not forward real usage). */
+  usageEstimated?: boolean;
+  /** User feedback on this answer (local for now). */
+  feedback?: 'like' | 'dislike' | null;
 }
 
 /* Parse an SSE stream from a fetch Response without extra dependencies. */
@@ -559,6 +565,14 @@ export default function App() {
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  // Elapsed-seconds ticker while the agent works — pairs with the activity
+  // line so a long tool run never looks like a hang.
+  useEffect(() => {
+    if (!busy) return;
+    const t = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [busy]);
   const [actionAck, setActionAck] = useState<string | null>(null);
   const [provider, setProvider] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -629,6 +643,7 @@ export default function App() {
     setInput('');
     setPendingAttachments([]);
     setBusy(true);
+    setElapsed(0);
     const history = messages
       .filter((m) => m.content)
       // Strip the a2ui wire blocks from history: the engine only needs the
@@ -711,6 +726,16 @@ export default function App() {
           setMessages((prev) => {
             const next = [...prev];
             next[next.length - 1] = { role: 'assistant', content: assistantText };
+            return next;
+          });
+        } else if (event === 'done') {
+          // ok run: attach the engine's token usage to the finished message
+          const usage = data?.usage;
+          const usageEstimated = data?.usage_estimated === true;
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === 'assistant') next[next.length - 1] = { ...last, usage, usageEstimated };
             return next;
           });
         }
@@ -860,6 +885,23 @@ export default function App() {
                   )}
                   <div className="msg__col">
                     {(m.toolCalls ?? []).map((c) => <ToolCallRow key={c.id} call={c} />)}
+                    {/* Live activity: while this run is busy, always show what
+                        the agent is doing (current tool / thinking) + elapsed
+                        seconds — the UI must never look frozen. */}
+                    {busy && i === messages.length - 1 && m.role === 'assistant' && (
+                      <div className="msg__activity" role="status" aria-live="polite">
+                        <span className="msg__activity-dot" aria-hidden="true" />
+                        <span>
+                          {(() => {
+                            const running = (m.toolCalls ?? []).filter((c) => c.status === 'running');
+                            const last = (m.toolCalls ?? [])[(m.toolCalls ?? []).length - 1];
+                            if (running.length || last?.status === 'running') return `AI กำลังใช้เครื่องมือ: ${last?.name ?? ''}…`;
+                            return 'AI กำลังคิดและเรียบเรียงคำตอบ…';
+                          })()}
+                        </span>
+                        <span className="msg__activity-timer">{elapsed}s</span>
+                      </div>
+                    )}
                     <div className="msg__bubble">
                       {m.content ? (
                         <div className="md">
@@ -872,6 +914,58 @@ export default function App() {
                       ) : ''))}
                       {m.a2uiMessages && <A2uiCard messages={m.a2uiMessages} onAction={onAction} />}
                     </div>
+                    {/* Completed answer actions: copy / feedback / tokens.
+                        (share + read-aloud intentionally deferred until asked.) */}
+                    {m.role === 'assistant' && m.content && !(busy && i === messages.length - 1) && (
+                      <div className="msg__actions">
+                        <button
+                          className="msg__action"
+                          aria-label="คัดลอกคำตอบ"
+                          title="คัดลอกคำตอบ"
+                          onClick={async () => {
+                            const textToCopy = displayContent(m.content);
+                            let ok = false;
+                            try { await navigator.clipboard.writeText(textToCopy); ok = true; }
+                            catch { /* fall through to legacy path */ }
+                            if (!ok) {
+                              // Legacy fallback (works without clipboard permissions)
+                              const ta = document.createElement('textarea');
+                              ta.value = textToCopy; ta.style.position = 'fixed'; ta.style.opacity = '0';
+                              document.body.appendChild(ta); ta.select();
+                              try { ok = document.execCommand('copy'); } catch { ok = false; }
+                              ta.remove();
+                            }
+                            setActionAck(ok ? 'คัดลอกคำตอบแล้ว' : 'คัดลอกไม่สำเร็จ');
+                            setTimeout(() => setActionAck(null), 1800);
+                          }}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        </button>
+                        <button
+                          className={`msg__action${m.feedback === 'like' ? ' msg__action--on' : ''}`}
+                          aria-label="คำตอบดี"
+                          title="คำตอบดี"
+                          onClick={() => setMessages((prev) => { const n = [...prev]; if (n[i]) n[i] = { ...n[i]!, feedback: n[i]!.feedback === 'like' ? null : 'like' }; return n; })}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill={m.feedback === 'like' ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg>
+                        </button>
+                        <button
+                          className={`msg__action${m.feedback === 'dislike' ? ' msg__action--on' : ''}`}
+                          aria-label="คำตอบไม่ดี"
+                          title="คำตอบไม่ดี"
+                          onClick={() => setMessages((prev) => { const n = [...prev]; if (n[i]) n[i] = { ...n[i]!, feedback: n[i]!.feedback === 'dislike' ? null : 'dislike' }; return n; })}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill={m.feedback === 'dislike' ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg>
+                        </button>
+                        {(() => {
+                          const u = m.usage;
+                          const total = u?.totalTokens ?? (((u?.input ?? 0) + (u?.output ?? 0)) || null);
+                          return total
+                            ? <span className="msg__tokens" title={`input ${u?.input ?? 0} · output ${u?.output ?? 0}${m.usageEstimated ? ' (ประมาณ)' : ''}`}>{m.usageEstimated ? '≈' : '⌘'} {total.toLocaleString('en')} tokens</span>
+                            : null;
+                        })()}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
