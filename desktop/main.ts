@@ -115,7 +115,13 @@ const updateState = {
 async function initUpdater() {
   if (!app.isPackaged) return;
   try {
-    const { autoUpdater } = await import('electron-updater');
+    // Plain require, not dynamic import: inside the esbuild cjs bundle an
+    // `await import()` interop layer loses electron-updater's named export
+    // (autoUpdater === undefined at runtime). --external keeps this require
+    // intact so it resolves against node_modules inside the app.asar.
+    const m: any = require('electron-updater');
+    const autoUpdater = m.autoUpdater ?? m.default?.autoUpdater;
+    if (!autoUpdater) throw new Error('autoUpdater export not found');
     autoUpdater.autoDownload = false; // user triggers download from the UI
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.on('update-available', (info: any) => {
@@ -137,6 +143,7 @@ async function initUpdater() {
     });
     updater = autoUpdater;
     updateState.supported = true;
+    console.log('[update] supported: electron-updater loaded');
   } catch (e) {
     console.log(`[update] unavailable: ${String(e).slice(0, 120)}`);
   }
