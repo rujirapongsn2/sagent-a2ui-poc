@@ -3,6 +3,11 @@ name: desktop-release
 # Phase 1 CI: build the Rust engine + Electron installers for macOS and
 # Windows from one workflow. Trigger manually or by tag; artifacts attach to
 # the run (publish to GitHub Releases when a tag is pushed).
+#
+# macos-13 (Intel) dropped: its runner queue stalled for 24h and cancelled
+# whole runs. Intel Macs are out of scope for now.
+# latest*.yml + blockmap MUST ship with the release — electron-updater
+# reads them to discover versions, checksums and delta updates.
 on:
   workflow_dispatch:
   push:
@@ -16,8 +21,6 @@ jobs:
         include:
           - os: macos-latest      # arm64
             rust-targets: aarch64-apple-darwin
-          - os: macos-13         # x64 (intel)
-            rust-targets: x86_64-apple-darwin
           - os: windows-latest    # x64
             rust-targets: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
@@ -70,15 +73,14 @@ jobs:
           npx electron-builder --publish never ${{ startsWith(matrix.os, 'macos') && '--mac' || '--win' }}
 
       - uses: actions/upload-artifact@v4
+        name: upload installer + updater feed
         with:
           name: sagent-desktop-${{ matrix.os }}
-          path: app-src/desktop/release/*.dmg
-          if-no-files-found: ignore
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sagent-desktop-${{ matrix.os }}-exe
-          path: app-src/desktop/release/*.exe
+          path: |
+            app-src/desktop/release/*.dmg
+            app-src/desktop/release/*.exe
+            app-src/desktop/release/*.blockmap
+            app-src/desktop/release/latest*.yml
           if-no-files-found: ignore
 
   release:
@@ -97,3 +99,5 @@ jobs:
           files: |
             artifacts/*.dmg
             artifacts/*.exe
+            artifacts/*.blockmap
+            artifacts/*.yml
